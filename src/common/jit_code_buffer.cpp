@@ -10,6 +10,10 @@
 #include <sys/mman.h>
 #endif
 
+#ifdef __XSDK__
+#include <xsdk/jit.h>
+#endif
+
 #if defined(__APPLE__) && defined(__aarch64__)
 // pthread_jit_write_protect_np()
 #include <pthread.h>
@@ -46,6 +50,16 @@ bool JitCodeBuffer::Allocate(uint32_t size /* = 64 * 1024 * 1024 */, uint32_t fa
   m_code_ptr = static_cast<uint8_t*>(mmap(nullptr, m_total_size, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0));
   if (!m_code_ptr)
     return false;
+#elif defined(__XSDK__)
+  // The console refuses executable mappings: the code goes in the title's .jit pool (docs/GUIDE.md, "Anonymous pages and
+  // generated code"), which src/xenon/jit_pool.S sizes.
+  void* pool = nullptr;
+  size_t pool_size = 0;
+  xsdk_jit_pool(&pool, &pool_size);
+  if (pool_size < m_total_size)
+    return false;
+
+  m_code_ptr = static_cast<uint8_t*>(pool);
 #else
   return false;
 #endif
@@ -60,7 +74,11 @@ bool JitCodeBuffer::Allocate(uint32_t size /* = 64 * 1024 * 1024 */, uint32_t fa
   m_far_code_used = 0;
 
   m_old_protection = 0;
+#ifdef __XSDK__
+  m_owns_buffer = false;
+#else
   m_owns_buffer = true;
+#endif
   return true;
 }
 
@@ -138,7 +156,7 @@ void JitCodeBuffer::Destroy()
 #if defined(_WIN32)
     DWORD old_protect = 0;
     VirtualProtect(m_code_ptr, m_total_size, m_old_protection, &old_protect);
-#else
+#elif !defined(__XSDK__)
     mprotect(m_code_ptr, m_total_size, m_old_protection);
 #endif
   }
@@ -170,8 +188,8 @@ void JitCodeBuffer::CommitCode(uint32_t length)
   if (length == 0)
     return;
 
-#if defined(CPU_AARCH32) || defined(CPU_AARCH64)
-  // ARM instruction and data caches are not coherent, we need to flush after every block.
+#if defined(CPU_AARCH32) || defined(CPU_AARCH64) || defined(CPU_POWERPC)
+  // ARM and PowerPC instruction and data caches are not coherent, we need to flush after every block.
   FlushInstructionCache(m_free_code_ptr, length);
 #endif
 
@@ -184,8 +202,8 @@ void JitCodeBuffer::CommitFarCode(uint32_t length)
   if (length == 0)
     return;
 
-#if defined(CPU_AARCH32) || defined(CPU_AARCH64)
-  // ARM instruction and data caches are not coherent, we need to flush after every block.
+#if defined(CPU_AARCH32) || defined(CPU_AARCH64) || defined(CPU_POWERPC)
+  // ARM and PowerPC instruction and data caches are not coherent, we need to flush after every block.
   FlushInstructionCache(m_free_far_code_ptr, length);
 #endif
 
@@ -238,6 +256,9 @@ void JitCodeBuffer::FlushInstructionCache(void* address, uint32_t size)
   // ___clear_cache instead - a compiler-rt symbol those SDKs do not ship, so
   // the link ends in "Undefined symbols for architecture arm64".
   sys_icache_invalidate(address, size);
+#elif defined(__XSDK__)
+  // GCC's __builtin___clear_cache does nothing in the console's toolchain; this also ends in isync for this thread.
+  xsdk_code_flush(address, size);
 #elif defined(__GNUC__) || defined(__clang__)
   __builtin___clear_cache(reinterpret_cast<char*>(address), reinterpret_cast<char*>(address) + size);
 #else
