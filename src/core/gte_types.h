@@ -39,6 +39,45 @@ union FLAGS
   ALWAYS_INLINE void UpdateError() { error = (bits & UINT32_C(0x7F87E000)) != UINT32_C(0); }
 };
 
+#ifdef MSB_FIRST
+// A big-endian host keeps the low half of a register word second and its low byte last. These keep the indices of the
+// little-endian layout, so the code reads [0] for the low half or byte on every host.
+template<uint32_t COUNT>
+struct HalfLanes
+{
+  int16_t raw[COUNT];
+
+  int16_t& operator[](uint32_t index) { return raw[index ^ 1]; }
+  const int16_t& operator[](uint32_t index) const { return raw[index ^ 1]; }
+};
+
+struct ByteLanes
+{
+  uint8_t raw[4];
+
+  uint8_t& operator[](uint32_t index) { return raw[index ^ 3]; }
+  const uint8_t& operator[](uint32_t index) const { return raw[index ^ 3]; }
+};
+
+// Nine halfwords and a pad one, in the order of the register words they sit in.
+struct Matrix
+{
+  template<typename T>
+  struct Row
+  {
+    T* raw;
+    uint32_t first;
+
+    T& operator[](uint32_t index) const { return raw[(first + index) ^ 1]; }
+  };
+
+  int16_t raw[10];
+
+  Row<int16_t> operator[](uint32_t row) { return {raw, row * 3}; }
+  Row<const int16_t> operator[](uint32_t row) const { return {raw, row * 3}; }
+};
+#endif
+
 union Regs
 {
   struct
@@ -49,6 +88,67 @@ union Regs
 
   uint32_t r32[NUM_DATA_REGS + NUM_CONTROL_REGS];
 
+#ifdef MSB_FIRST
+  struct
+  {
+    HalfLanes<4> V0;   // 0-1, with its pad
+    HalfLanes<4> V1;   // 2-3
+    HalfLanes<4> V2;   // 4-5
+    ByteLanes RGBC;    // 6
+    uint16_t pad4;     // 7
+    uint16_t OTZ;
+    uint16_t pad5;     // 8
+    int16_t IR0;
+    uint16_t pad6;     // 9
+    int16_t IR1;
+    uint16_t pad7;     // 10
+    int16_t IR2;
+    uint16_t pad8;     // 11
+    int16_t IR3;
+    HalfLanes<2> SXY0; // 12
+    HalfLanes<2> SXY1; // 13
+    HalfLanes<2> SXY2; // 14
+    HalfLanes<2> SXYP; // 15
+    uint16_t pad13;    // 16
+    uint16_t SZ0;
+    uint16_t pad14;    // 17
+    uint16_t SZ1;
+    uint16_t pad15;    // 18
+    uint16_t SZ2;
+    uint16_t pad16;    // 19
+    uint16_t SZ3;
+    ByteLanes RGB0;    // 20
+    ByteLanes RGB1;    // 21
+    ByteLanes RGB2;    // 22
+    uint32_t RES1;     // 23
+    int32_t MAC0;      // 24
+    int32_t MAC1;      // 25
+    int32_t MAC2;      // 26
+    int32_t MAC3;      // 27
+    uint32_t IRGB;     // 28
+    uint32_t ORGB;     // 29
+    int32_t LZCS;      // 30
+    uint32_t LZCR;     // 31
+    Matrix RT;         // 32-36
+    int32_t TR[3];     // 37-39
+    Matrix LLM;        // 40-44
+    int32_t BK[3];     // 45-47
+    Matrix LCM;        // 48-52
+    int32_t FC[3];     // 53-55
+    int32_t OFX;       // 56
+    int32_t OFY;       // 57
+    uint16_t pad20;    // 58
+    uint16_t H;
+    uint16_t pad21;    // 59
+    int16_t DQA;
+    int32_t DQB;       // 60
+    uint16_t pad22;    // 61
+    int16_t ZSF3;
+    uint16_t pad23;    // 62
+    int16_t ZSF4;
+    FLAGS FLAG;        // 63
+  };
+#else
 #pragma pack(push, 1)
   struct
   {
@@ -116,7 +216,10 @@ union Regs
     FLAGS FLAG;    // 63
   };
 #pragma pack(pop)
+#endif
 };
+
+static_assert(sizeof(Regs) == sizeof(uint32_t) * NUM_REGS, "the register file must be exactly its 64 words");
 
 union Instruction
 {

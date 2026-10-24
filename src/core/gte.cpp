@@ -459,7 +459,8 @@ ALWAYS_INLINE static uint32_t UNRDivide(uint32_t lhs, uint32_t rhs)
   return std::min<uint32_t>(0x1FFFF, result);
 }
 
-static void MulMatVec(const int16_t M[3][3], const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift, bool lm)
+template<typename MatrixType>
+static void MulMatVec(const MatrixType& M, const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift, bool lm)
 {
 #define dot3(i)                                                                                                        \
   TruncateAndSetMACAndIR<i + 1>(SignExtendMACResult<i + 1>((int64_t(M[i][0]) * int64_t(Vx)) + (int64_t(M[i][1]) * int64_t(Vy))) +      \
@@ -473,7 +474,8 @@ static void MulMatVec(const int16_t M[3][3], const int16_t Vx, const int16_t Vy,
 #undef dot3
 }
 
-static void MulMatVec(const int16_t M[3][3], const int32_t T[3], const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift, bool lm)
+template<typename MatrixType>
+static void MulMatVec(const MatrixType& M, const int32_t T[3], const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift, bool lm)
 {
 #define dot3(i)                                                                                                        \
   TruncateAndSetMACAndIR<i + 1>(                                                                                       \
@@ -489,7 +491,8 @@ static void MulMatVec(const int16_t M[3][3], const int32_t T[3], const int16_t V
 #undef dot3
 }
 
-static void MulMatVecBuggy(const int16_t M[3][3], const int32_t T[3], const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift,
+template<typename MatrixType>
+static void MulMatVecBuggy(const MatrixType& M, const int32_t T[3], const int16_t Vx, const int16_t Vy, const int16_t Vz, uint8_t shift,
                            bool lm)
 {
 #define dot3(i)                                                                                                        \
@@ -510,6 +513,17 @@ static void MulMatVecBuggy(const int16_t M[3][3], const int32_t T[3], const int1
 #undef dot3
 }
 
+#ifdef MSB_FIRST
+static void CopyMatrix(int16_t (&to)[3][3], const Matrix& from)
+{
+  for (uint32_t row = 0; row < 3; row++)
+  {
+    for (uint32_t column = 0; column < 3; column++)
+      to[row][column] = from[row][column];
+  }
+}
+#endif
+
 static void Execute_MVMVA(Instruction inst)
 {
   REGS.FLAG.Clear();
@@ -519,13 +533,25 @@ static void Execute_MVMVA(Instruction inst)
   switch (inst.mvmva_multiply_matrix)
   {
     case 0:
+#ifdef MSB_FIRST
+      CopyMatrix(M, REGS.RT);
+#else
       std::memcpy(M, REGS.RT, sizeof(int16_t) * 3 * 3);
+#endif
       break;
     case 1:
+#ifdef MSB_FIRST
+      CopyMatrix(M, REGS.LLM);
+#else
       std::memcpy(M, REGS.LLM, sizeof(int16_t) * 3 * 3);
+#endif
       break;
     case 2:
+#ifdef MSB_FIRST
+      CopyMatrix(M, REGS.LCM);
+#else
       std::memcpy(M, REGS.LCM, sizeof(int16_t) * 3 * 3);
+#endif
       break;
     default:
     {
@@ -629,7 +655,8 @@ static void Execute_OP(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-static void RTPS(const int16_t V[3], uint8_t shift, bool lm, bool last)
+template<typename VectorType>
+static void RTPS(const VectorType& V, uint8_t shift, bool lm, bool last)
 {
 #define dot3(i)                                                                                                        \
   SignExtendMACResult<i + 1>(SignExtendMACResult<i + 1>((int64_t(REGS.TR[i]) << 12) + (int64_t(REGS.RT[i][0]) * int64_t(V[0]))) +  \
@@ -859,7 +886,8 @@ static ALWAYS_INLINE void InterpolateColor(int64_t in_MAC1, int64_t in_MAC2, int
   TruncateAndSetMACAndIR<3>(int64_t(int32_t(REGS.IR3) * int32_t(REGS.IR0)) + in_MAC3, shift, lm);
 }
 
-static void NCS(const int16_t V[3], uint8_t shift, bool lm)
+template<typename VectorType>
+static void NCS(const VectorType& V, uint8_t shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(REGS.LLM, V[0], V[1], V[2], shift, lm);
@@ -894,7 +922,8 @@ static void Execute_NCT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-static void NCCS(const int16_t V[3], uint8_t shift, bool lm)
+template<typename VectorType>
+static void NCCS(const VectorType& V, uint8_t shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(REGS.LLM, V[0], V[1], V[2], shift, lm);
@@ -935,7 +964,8 @@ static void Execute_NCCT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-static void NCDS(const int16_t V[3], uint8_t shift, bool lm)
+template<typename VectorType>
+static void NCDS(const VectorType& V, uint8_t shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(REGS.LLM, V[0], V[1], V[2], shift, lm);
@@ -1027,7 +1057,8 @@ static void Execute_CDP(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-static void DPCS(const uint8_t color[3], uint8_t shift, bool lm)
+template<typename ColorType>
+static void DPCS(const ColorType& color, uint8_t shift, bool lm)
 {
   // In: [IR1,IR2,IR3]=Vector, FC=Far Color, IR0=Interpolation value, CODE=MSB of RGBC
   // [MAC1,MAC2,MAC3] = [R,G,B] SHL 16                     ;<--- for DPCS/DPCT
