@@ -24,6 +24,8 @@
 #define CPU_AARCH64 1
 #elif defined(__arm__)
 #define CPU_AARCH32 1
+#elif defined(__XSDK__)
+#define CPU_POWERPC 1
 #else
 #error Unknown architecture.
 #endif

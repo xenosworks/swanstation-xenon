@@ -1,4 +1,11 @@
-add_library(swanstation_libretro SHARED
+# A static library on the console, which loads no shared ones.
+if(XSDK)
+  set(LIBRETRO_CORE_TYPE STATIC)
+else()
+  set(LIBRETRO_CORE_TYPE SHARED)
+endif()
+
+add_library(swanstation_libretro ${LIBRETRO_CORE_TYPE}
   libretro_audio_stream.cpp
   libretro_audio_stream.h
   libretro_game_settings.cpp
@@ -10,7 +17,11 @@ add_library(swanstation_libretro SHARED
   libretro_settings_interface.h
 )
 
-target_link_libraries(swanstation_libretro PRIVATE core common glad vulkan-loader libretro-common)
+if(XSDK)
+  target_link_libraries(swanstation_libretro PRIVATE core common libretro-common)
+else()
+  target_link_libraries(swanstation_libretro PRIVATE core common glad vulkan-loader libretro-common)
+endif()
 
 # no lib prefix
 set_target_properties(swanstation_libretro PROPERTIES PREFIX "")

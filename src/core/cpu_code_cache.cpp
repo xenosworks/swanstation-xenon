@@ -7,6 +7,9 @@
 #include "system.h"
 #include "timing_event.h"
 #include <cstring>
+#ifdef __XSDK__
+#include <algorithm>
+#endif
 Log_SetChannel(CPU::CodeCache);
 
 #ifdef WITH_RECOMPILER

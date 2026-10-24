@@ -57,6 +57,9 @@ private:
   void* m_file_handle = nullptr;
 #elif defined(__linux__) || defined(ANDROID) || defined(__APPLE__) || defined(__FreeBSD__)
   int m_shmem_fd = -1;
+#elif defined(__XSDK__)
+  // xsdk refuses shared mappings, so the arena is one block of the heap, with no fixed views.
+  void* m_memory = nullptr;
 #endif
 
   size_t m_size = 0;

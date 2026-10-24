@@ -802,6 +802,7 @@ bool CreateGPU(GPURenderer renderer)
 {
   switch (renderer)
   {
+#ifndef __XSDK__
     case GPURenderer::HardwareOpenGL:
       g_gpu = GPU::CreateHardwareOpenGLRenderer();
       break;
@@ -809,6 +810,7 @@ bool CreateGPU(GPURenderer renderer)
     case GPURenderer::HardwareVulkan:
       g_gpu = GPU::CreateHardwareVulkanRenderer();
       break;
+#endif
 
 #ifdef _WIN32
     case GPURenderer::HardwareD3D11:

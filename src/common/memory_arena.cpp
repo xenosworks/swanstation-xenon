@@ -17,6 +17,9 @@ Log_SetChannel(Common::MemoryArena);
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#elif defined(__XSDK__)
+#include <cstdlib>
+#include <unistd.h>
 #endif
 
 namespace Common {
@@ -97,6 +100,8 @@ bool MemoryArena::IsValid() const
 {
 #if defined(_WIN32)
   return m_file_handle != nullptr;
+#elif defined(__XSDK__)
+  return m_memory != nullptr;
 #else
   return m_shmem_fd >= 0;
 #endif
@@ -106,7 +111,7 @@ static std::string GetFileMappingName()
 {
 #if defined(_WIN32)
   const unsigned pid = GetCurrentProcessId();
-#elif defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#elif defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__XSDK__)
   const unsigned pid = static_cast<unsigned>(getpid());
 #else
 #error Unknown platform.
@@ -202,6 +207,18 @@ bool MemoryArena::Create(size_t size, bool writable, bool executable)
   m_writable = writable;
   m_executable = executable;
   return true;
+#elif defined(__XSDK__)
+  m_memory = std::calloc(1, size);
+  if (!m_memory)
+  {
+    Log_ErrorPrintf("Failed to allocate %zu bytes", size);
+    return false;
+  }
+
+  m_size = size;
+  m_writable = writable;
+  m_executable = executable;
+  return true;
 #else
   return false;
 #endif
@@ -221,6 +238,9 @@ void MemoryArena::Destroy()
     close(m_shmem_fd);
     m_shmem_fd = -1;
   }
+#elif defined(__XSDK__)
+  std::free(m_memory);
+  m_memory = nullptr;
 #endif
 }
 
@@ -259,6 +279,11 @@ void* MemoryArena::CreateViewPtr(size_t offset, size_t size, bool writable, bool
   base_pointer = mmap(fixed_address, size, prot, flags, m_shmem_fd, static_cast<off_t>(offset));
   if (base_pointer == reinterpret_cast<void*>(-1))
     return nullptr;
+#elif defined(__XSDK__)
+  // Only a view the arena places itself: a fixed address is what fastmem asks for, and it isn't built.
+  if (fixed_address != nullptr || !m_memory || offset + size > m_size)
+    return nullptr;
+  base_pointer = static_cast<uint8_t*>(m_memory) + offset;
 #else
   return nullptr;
 #endif
@@ -284,6 +309,9 @@ bool MemoryArena::ReleaseViewPtr(void* address, size_t size)
   result = static_cast<bool>(UnmapViewOfFile(address));
 #elif defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
   result = (munmap(address, size) >= 0);
+#elif defined(__XSDK__)
+  // The view is the arena's own memory, which Destroy() frees.
+  result = true;
 #else
   result = false;
 #endif

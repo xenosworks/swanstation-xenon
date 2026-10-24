@@ -17,7 +17,12 @@ set(USE_FBDEV OFF)
 set(USE_EVDEV OFF)
 
 # Force PIC when compiling a libretro core.
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(XSDK)
+  # The console's titles are not position independent (xsdk's toolchain file builds -fno-pic).
+  set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+else()
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 # Set _DEBUG macro for Debug builds.
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -D_DEBUG")
@@ -55,10 +60,12 @@ if(MSVC)
 endif()
 
 # COMDAT folding/remove unused functions.
-set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF")
+if(NOT XSDK)
+  set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF")
+endif()
 
-# Enable LTO/LTCG on Release builds.
-if(CMAKE_BUILD_TYPE MATCHES "Release")
+# Enable LTO/LTCG on Release builds, but not under xsdk.
+if(CMAKE_BUILD_TYPE MATCHES "Release" AND NOT XSDK)
   cmake_policy(SET CMP0069 NEW)
   include(CheckIPOSupported)
   check_ipo_supported(RESULT IPO_IS_SUPPORTED)
@@ -122,6 +129,9 @@ elseif(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "arm" OR ${CMAKE_SYSTEM_PROCESSOR} STR
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -marm -march=armv7-a")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -marm -march=armv7-a")
   endif()
+elseif(XSDK)
+  # The Xbox 360's PowerPC: the interpreter only, there is no recompiler backend for it.
+  set(CPU_ARCH "powerpc")
 else()
   message(FATAL_ERROR "Unknown system processor: " ${CMAKE_SYSTEM_PROCESSOR})
 endif()

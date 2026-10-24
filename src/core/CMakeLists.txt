@@ -114,8 +114,17 @@ set(RECOMPILER_SRCS
 
 target_include_directories(core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(core PUBLIC Threads::Threads common miniz libretro-common vulkan-loader)
-target_link_libraries(core PRIVATE glad openbios stb xxhash)
+if(XSDK)
+  # The console has no OpenGL or Vulkan: the software renderer only, so no hardware renderer or its shader generator.
+  get_target_property(core_sources core SOURCES)
+  list(FILTER core_sources EXCLUDE REGEX "^(gpu_hw|shadergen)")
+  set_property(TARGET core PROPERTY SOURCES ${core_sources})
+  target_link_libraries(core PUBLIC Threads::Threads common miniz libretro-common)
+  target_link_libraries(core PRIVATE openbios stb xxhash)
+else()
+  target_link_libraries(core PUBLIC Threads::Threads common miniz libretro-common vulkan-loader)
+  target_link_libraries(core PRIVATE glad openbios stb xxhash)
+endif()
 
 if(WIN32)
   target_sources(core PRIVATE
