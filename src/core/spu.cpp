@@ -122,19 +122,20 @@ ALWAYS_INLINE static uint32_t VoiceRegisterIndex(uint32_t index)
 bool SPU::DoState(StateWrapper& sw)
 {
 #ifdef MSB_FIRST
-  // The bytes a little-endian host's DoPOD writes: 8 for an envelope, 12 for a sweep, a pad byte in each.
+  // The bytes a little-endian host's DoPOD writes: 8 for an envelope, 12 for a sweep, a pad byte in each. The bools go
+  // as raw bytes so IsValid still rejects a byte that is not 0 or 1.
   const auto do_envelope = [&sw](VolumeEnvelope* envelope) {
     uint8_t pad = 0;
     sw.Do(&envelope->counter);
     sw.Do(&envelope->rate);
-    sw.Do(&envelope->decreasing);
-    sw.Do(&envelope->exponential);
+    sw.Do(reinterpret_cast<uint8_t*>(&envelope->decreasing));
+    sw.Do(reinterpret_cast<uint8_t*>(&envelope->exponential));
     sw.Do(&pad);
   };
   const auto do_sweep = [&sw, &do_envelope](VolumeSweep* sweep) {
     uint8_t pad = 0;
     do_envelope(&sweep->envelope);
-    sw.Do(&sweep->envelope_active);
+    sw.Do(reinterpret_cast<uint8_t*>(&sweep->envelope_active));
     sw.Do(&pad);
     sw.Do(&sweep->current_level);
   };
