@@ -461,6 +461,13 @@ void MDEC::CopyOutBlock()
 #ifdef __XSDK__
   xenon_profile.mdec_macroblocks++;
   const uint32_t pack_start = xenon_profile_now();
+  // The block's words gathered here and pushed at once. A push stores the FIFO's indices, its word could alias them,
+  // and the next push loads them again: on Xenon a load from a store still queued, which stalls, every word.
+  uint32_t out_words[DATA_OUT_FIFO_SIZE / sizeof(uint32_t)];
+  uint32_t out_count = 0;
+#define PUSH_OUT(value) (out_words[out_count++] = (value))
+#else
+#define PUSH_OUT(value) m_data_out_fifo.Push(value)
 #endif
 
   switch (m_status.data_output_depth)
@@ -478,7 +485,7 @@ void MDEC::CopyOutBlock()
         value |= (*(in_ptr++) >> 4) << 20;
         value |= (*(in_ptr++) >> 4) << 24;
         value |= (*(in_ptr++) >> 4) << 28;
-        m_data_out_fifo.Push(value);
+        PUSH_OUT(value);
       }
     }
     break;
@@ -492,7 +499,7 @@ void MDEC::CopyOutBlock()
         value |= *in_ptr++ << 8;
         value |= *in_ptr++ << 16;
         value |= *in_ptr++ << 24;
-        m_data_out_fifo.Push(value);
+        PUSH_OUT(value);
       }
     }
     break;
@@ -513,21 +520,21 @@ void MDEC::CopyOutBlock()
             break;
           case 1:
             rgb |= (m_block_rgb[index] & 0xFF) << 24; // RGBR
-            m_data_out_fifo.Push(rgb);
+            PUSH_OUT(rgb);
             rgb = m_block_rgb[index] >> 8; // GB--
             index++;
             state = 2;
             break;
           case 2:
             rgb |= m_block_rgb[index] << 16; // GBRG
-            m_data_out_fifo.Push(rgb);
+            PUSH_OUT(rgb);
             rgb = m_block_rgb[index] >> 16; // B---
             index++;
             state = 3;
             break;
           case 3:
             rgb |= m_block_rgb[index] << 8; // BRGB
-            m_data_out_fifo.Push(rgb);
+            PUSH_OUT(rgb);
             index++;
             state = 0;
             break;
@@ -557,7 +564,7 @@ void MDEC::CopyOutBlock()
           const uint32_t color15b = r | (g << 5) | (b << 10) | a;
 #undef E8TO5
 
-          m_data_out_fifo.Push(color15a | (color15b << 16));
+          PUSH_OUT(color15a | (color15b << 16));
         }
       }
       else
@@ -590,7 +597,7 @@ void MDEC::CopyOutBlock()
           b = static_cast<uint16_t>((color >> 19) & 0x1Fu);
           const uint16_t color15b = static_cast<uint16_t>(r | (g << 5) | (b << 10)) | a;
 
-          m_data_out_fifo.Push(static_cast<uint32_t>(color15a) | (static_cast<uint32_t>(color15b) << 16));
+          PUSH_OUT(static_cast<uint32_t>(color15a) | (static_cast<uint32_t>(color15b) << 16));
         }
       }
     }
@@ -601,8 +608,10 @@ void MDEC::CopyOutBlock()
   }
 
 #ifdef __XSDK__
+  m_data_out_fifo.PushRange(out_words, out_count);
   xenon_profile.mdec_pack_ticks += xenon_profile_now() - pack_start;
 #endif
+#undef PUSH_OUT
 
   // if we've copied out all blocks, command is complete
   m_state = (m_remaining_halfwords == 0) ? State::Idle : State::DecodingMacroblock;
@@ -809,6 +818,42 @@ void MDEC::YUVToRGB_Old(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>&
   static constexpr int32_t COEF_ONE = 16384;       // Q14 scale (1 << 14)
 
   const int16_t addval = m_status.data_output_signed ? 0 : 0x80;
+#ifdef __XSDK__
+  // Each chroma sample's terms once, for the four pixels that share it, and clamps that don't branch, with the #else
+  // branch's results: Xenon pays for the multiplies and for mispredicting the compares, which video clamps often,
+  // 144 cycles a pixel in Digimon World's opening movie.
+  int32_t r_terms[16], g_terms[16], b_terms[16];
+  for (uint32_t cy = 0; cy < 4; cy++)
+  {
+    for (uint32_t cx = 0; cx < 4; cx++)
+    {
+      const int32_t Cr = Crblk[(xx / 2 + cx) + (yy / 2 + cy) * 8];
+      const int32_t Cb = Cbblk[(xx / 2 + cx) + (yy / 2 + cy) * 8];
+      r_terms[cx + cy * 4] = (COEF_CR_TO_R * Cr) / COEF_ONE;
+      b_terms[cx + cy * 4] = (COEF_CB_TO_B * Cb) / COEF_ONE;
+      g_terms[cx + cy * 4] = ((COEF_CB_TO_G * Cb) + (COEF_CR_TO_G * Cr)) / COEF_ONE;
+    }
+  }
+  // std::clamp(value, -128, 127) by masks.
+  const auto clamp = [](int32_t value) {
+    const int32_t over = value - 127;
+    value -= over & ~(over >> 31);
+    const int32_t under = value + 128;
+    return value - (under & (under >> 31));
+  };
+  for (uint32_t y = 0; y < 8; y++)
+  {
+    for (uint32_t x = 0; x < 8; x++)
+    {
+      const uint32_t c = x / 2 + (y / 2) * 4;
+      const int32_t Y = Yblk[x + y * 8];
+      const uint32_t R = static_cast<uint16_t>(clamp(Y + r_terms[c]) + addval);
+      const uint32_t G = static_cast<uint16_t>(clamp(Y + g_terms[c]) + addval);
+      const uint32_t B = static_cast<uint16_t>(clamp(Y + b_terms[c]) + addval);
+      m_block_rgb[(x + xx) + ((y + yy) * 16)] = R | (G << 8) | (B << 16);
+    }
+  }
+#else
   for (uint32_t y = 0; y < 8; y++)
   {
     for (uint32_t x = 0; x < 8; x++)
@@ -830,6 +875,7 @@ void MDEC::YUVToRGB_Old(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>&
                                                 (static_cast<uint32_t>(static_cast<uint16_t>(B)) << 16);
     }
   }
+#endif
 }
 
 bool MDEC::DecodeRLE_New(int16_t* blk, const uint8_t* qt)
