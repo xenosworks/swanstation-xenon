@@ -1,6 +1,7 @@
 #include "bus.h"
 #include "cdrom.h"
 #include "common/align.h"
+#include "common/little_endian.h"
 #include "common/make_array.h"
 #include "common/state_wrapper.h"
 #include "cpu_code_cache.h"
@@ -551,13 +552,11 @@ ALWAYS_INLINE static TickCount DoRAMAccess(uint32_t offset, uint32_t& value)
     }
     else if constexpr (size == MemoryAccessSize::HalfWord)
     {
-      uint16_t temp;
-      std::memcpy(&temp, &g_ram[offset], sizeof(uint16_t));
-      value = static_cast<uint32_t>(temp);
+      value = static_cast<uint32_t>(LoadLE16(&g_ram[offset]));
     }
     else if constexpr (size == MemoryAccessSize::Word)
     {
-      std::memcpy(&value, &g_ram[offset], sizeof(uint32_t));
+      value = LoadLE32(&g_ram[offset]);
     }
   }
   else
@@ -577,22 +576,20 @@ ALWAYS_INLINE static TickCount DoRAMAccess(uint32_t offset, uint32_t& value)
       else if constexpr (size == MemoryAccessSize::HalfWord)
       {
         const uint16_t new_value = static_cast<uint16_t>(value);
-        uint16_t old_value;
-        std::memcpy(&old_value, &g_ram[offset], sizeof(old_value));
+        const uint16_t old_value = LoadLE16(&g_ram[offset]);
         if (old_value != new_value)
         {
-          std::memcpy(&g_ram[offset], &new_value, sizeof(uint16_t));
+          StoreLE16(&g_ram[offset], new_value);
           if (m_ram_code_bits[page_index])
             CPU::CodeCache::InvalidateBlocksWithPageIndex(page_index);
         }
       }
       else if constexpr (size == MemoryAccessSize::Word)
       {
-        uint32_t old_value;
-        std::memcpy(&old_value, &g_ram[offset], sizeof(uint32_t));
+        const uint32_t old_value = LoadLE32(&g_ram[offset]);
         if (old_value != value)
         {
-          std::memcpy(&g_ram[offset], &value, sizeof(uint32_t));
+          StoreLE32(&g_ram[offset], value);
           if (m_ram_code_bits[page_index])
             CPU::CodeCache::InvalidateBlocksWithPageIndex(page_index);
         }
@@ -609,12 +606,11 @@ ALWAYS_INLINE static TickCount DoRAMAccess(uint32_t offset, uint32_t& value)
       }
       else if constexpr (size == MemoryAccessSize::HalfWord)
       {
-        const uint16_t temp = static_cast<uint16_t>(value);
-        std::memcpy(&g_ram[offset], &temp, sizeof(uint16_t));
+        StoreLE16(&g_ram[offset], static_cast<uint16_t>(value));
       }
       else if constexpr (size == MemoryAccessSize::Word)
       {
-        std::memcpy(&g_ram[offset], &value, sizeof(uint32_t));
+        StoreLE32(&g_ram[offset], value);
       }
     }
   }
@@ -632,13 +628,9 @@ ALWAYS_INLINE static TickCount DoBIOSAccess(uint32_t offset, uint32_t& value)
     if constexpr (size == MemoryAccessSize::Byte)
       value = static_cast<uint32_t>(g_bios[offset]);
     else if constexpr (size == MemoryAccessSize::HalfWord)
-    {
-      uint16_t temp;
-      std::memcpy(&temp, &g_bios[offset], sizeof(uint16_t));
-      value = static_cast<uint32_t>(temp);
-    }
+      value = static_cast<uint32_t>(LoadLE16(&g_bios[offset]));
     else
-      std::memcpy(&value, &g_bios[offset], sizeof(uint32_t));
+      value = LoadLE32(&g_bios[offset]);
   }
 
   return m_bios_access_time[static_cast<uint32_t>(size)];
@@ -665,13 +657,9 @@ static TickCount DoEXP1Access(uint32_t offset, uint32_t& value)
         if constexpr (size == MemoryAccessSize::Byte)
           value = static_cast<uint32_t>(m_exp1_rom[offset]);
         else if constexpr (size == MemoryAccessSize::HalfWord)
-        {
-          uint16_t halfword;
-          std::memcpy(&halfword, &m_exp1_rom[offset], sizeof(halfword));
-          value = static_cast<uint32_t>(halfword);
-        }
+          value = static_cast<uint32_t>(LoadLE16(&m_exp1_rom[offset]));
         else
-          std::memcpy(&value, &m_exp1_rom[offset], sizeof(value));
+          value = LoadLE32(&m_exp1_rom[offset]);
       }
     }
 
@@ -975,6 +963,7 @@ ALWAYS_INLINE static TickCount DoDMAAccess(uint32_t offset, uint32_t& value)
 
 namespace CPU {
 
+// Copies the words as they sit in memory (little-endian), for the icache lines; callers that want a value swap it.
 template<bool add_ticks, bool icache_read = false, uint32_t word_count = 1, bool raise_exceptions>
 ALWAYS_INLINE_RELEASE bool DoInstructionRead(PhysicalMemoryAddress address, void* data)
 {
@@ -1083,9 +1072,7 @@ uint32_t FillICache(VirtualMemoryAddress address)
   g_state.icache_tags[line] = line_tag;
 
   const uint32_t offset = GetICacheLineOffset(address);
-  uint32_t result;
-  std::memcpy(&result, &line_data[offset], sizeof(result));
-  return result;
+  return LoadLE32(&line_data[offset]);
 }
 
 void ClearICache()
@@ -1099,9 +1086,7 @@ ALWAYS_INLINE_RELEASE static uint32_t ReadICache(VirtualMemoryAddress address)
   const uint32_t line = GetICacheLine(address);
   const uint8_t* line_data = &g_state.icache_data[line * ICACHE_LINE_SIZE];
   const uint32_t offset = GetICacheLineOffset(address);
-  uint32_t result;
-  std::memcpy(&result, &line_data[offset], sizeof(result));
-  return result;
+  return LoadLE32(&line_data[offset]);
 }
 
 ALWAYS_INLINE_RELEASE static void WriteICache(VirtualMemoryAddress address, uint32_t value)
@@ -1109,7 +1094,7 @@ ALWAYS_INLINE_RELEASE static void WriteICache(VirtualMemoryAddress address, uint
   const uint32_t line = GetICacheLine(address);
   const uint32_t offset = GetICacheLineOffset(address);
   g_state.icache_tags[line] = GetICacheTagForAddress(address) | ICACHE_INVALID_BITS;
-  std::memcpy(&g_state.icache_data[line * ICACHE_LINE_SIZE + offset], &value, sizeof(value));
+  StoreLE32(&g_state.icache_data[line * ICACHE_LINE_SIZE + offset], value);
 }
 
 static void WriteCacheControl(uint32_t value)
@@ -1131,23 +1116,16 @@ ALWAYS_INLINE static TickCount DoScratchpadAccess(PhysicalMemoryAddress address,
   else if constexpr (size == MemoryAccessSize::HalfWord)
   {
     if constexpr (type == MemoryAccessType::Read)
-    {
-      uint16_t temp;
-      std::memcpy(&temp, &g_state.dcache[cache_offset], sizeof(temp));
-      value = static_cast<uint32_t>(temp);
-    }
+      value = static_cast<uint32_t>(LoadLE16(&g_state.dcache[cache_offset]));
     else
-    {
-      uint16_t temp = static_cast<uint16_t>(value);
-      std::memcpy(&g_state.dcache[cache_offset], &temp, sizeof(temp));
-    }
+      StoreLE16(&g_state.dcache[cache_offset], static_cast<uint16_t>(value));
   }
   else if constexpr (size == MemoryAccessSize::Word)
   {
     if constexpr (type == MemoryAccessType::Read)
-      std::memcpy(&value, &g_state.dcache[cache_offset], sizeof(value));
+      value = LoadLE32(&g_state.dcache[cache_offset]);
     else
-      std::memcpy(&g_state.dcache[cache_offset], &value, sizeof(value));
+      StoreLE32(&g_state.dcache[cache_offset], value);
   }
 
   return 0;
@@ -1296,6 +1274,7 @@ bool FetchInstruction()
     {
       if (!DoInstructionRead<true, false, 1, true>(address, &g_state.next_instruction.bits))
         return false;
+      g_state.next_instruction.bits = SwapLE32(g_state.next_instruction.bits);
     }
     break;
 
@@ -1331,6 +1310,7 @@ bool FetchInstructionForInterpreterFallback()
       // We don't use the icache when doing interpreter fallbacks, because it's probably stale.
       if (!DoInstructionRead<false, false, 1, true>(address, &g_state.next_instruction.bits))
         return false;
+      g_state.next_instruction.bits = SwapLE32(g_state.next_instruction.bits);
     }
     break;
 
@@ -1362,7 +1342,10 @@ bool SafeReadInstruction(VirtualMemoryAddress addr, uint32_t* value)
     case 0x04: // KSEG0 - physical memory cached
     case 0x05: // KSEG1 - physical memory uncached
       // TODO: Check icache.
-      return DoInstructionRead<false, false, 1, false>(addr, value);
+      if (!DoInstructionRead<false, false, 1, false>(addr, value))
+        return false;
+      *value = SwapLE32(*value);
+      return true;
     case 0x01: // KUSEG 512M-1024M
     case 0x02: // KUSEG 1024M-1536M
     case 0x03: // KUSEG 1536M-2048M

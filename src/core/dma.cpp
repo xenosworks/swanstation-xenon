@@ -1,6 +1,7 @@
 #include "dma.h"
 #include "bus.h"
 #include "cdrom.h"
+#include "common/little_endian.h"
 #include "common/state_wrapper.h"
 #include "common/string_util.h"
 #include "cpu_code_cache.h"
@@ -321,8 +322,7 @@ bool DMA::DoTransferChannel(Channel channel)
       TickCount remaining_ticks = GetTransferSliceTicks();
       while (cs.request && remaining_ticks > 0)
       {
-        uint32_t header;
-        std::memcpy(&header, &ram_pointer[current_address & mask], sizeof(header));
+        const uint32_t header = LoadLE32(&ram_pointer[current_address & mask]);
         CPU::AddPendingTicks(10);
         remaining_ticks -= 10;
 
@@ -457,6 +457,7 @@ void DMA::UnhaltTransfer(TickCount ticks)
 
 TickCount DMA::TransferMemoryToDevice(Channel channel, uint32_t address, uint32_t increment, uint32_t word_count)
 {
+  // The devices get RAM's words as they sit in it, little-endian; they read them with LoadLE16 and LoadLE32.
   const uint32_t* src_pointer = reinterpret_cast<uint32_t*>(Bus::g_ram + address);
   const uint32_t mask = GetAddressMask();
   if (channel != Channel::GPU &&
@@ -484,9 +485,7 @@ TickCount DMA::TransferMemoryToDevice(Channel channel, uint32_t address, uint32_
         uint8_t* ram_pointer = Bus::g_ram;
         for (uint32_t i = 0; i < word_count; i++)
         {
-          uint32_t value;
-          std::memcpy(&value, &ram_pointer[address], sizeof(uint32_t));
-          g_gpu->DMAWrite(address, value);
+          g_gpu->DMAWrite(address, LoadLE32(&ram_pointer[address]));
           address = (address + increment) & mask;
         }
         g_gpu->EndDMAWrite();
@@ -526,13 +525,11 @@ TickCount DMA::TransferDeviceToMemory(Channel channel, uint32_t address, uint32_
     const uint32_t word_count_less_1 = word_count - 1;
     for (uint32_t i = 0; i < word_count_less_1; i++)
     {
-      uint32_t value = ((address - 4) & mask);
-      std::memcpy(&ram_pointer[address], &value, sizeof(value));
+      StoreLE32(&ram_pointer[address], (address - 4) & mask);
       address = (address - 4) & mask;
     }
 
-    const uint32_t terminator = UINT32_C(0xFFFFFF);
-    std::memcpy(&ram_pointer[address], &terminator, sizeof(terminator));
+    StoreLE32(&ram_pointer[address], UINT32_C(0xFFFFFF));
     CPU::CodeCache::InvalidateCodePages(address, word_count);
     return Bus::GetDMARAMTickCount(word_count);
   }

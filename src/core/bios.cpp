@@ -1,5 +1,6 @@
 #include "bios.h"
 #include "common/file_system.h"
+#include "common/little_endian.h"
 #include "common/md5_digest.h"
 #include <algorithm>
 #include <array>
@@ -133,10 +134,9 @@ void PatchBIOS(uint8_t* image, uint32_t image_size, uint32_t address, uint32_t v
 {
   const uint32_t phys_address = address & UINT32_C(0x1FFFFFFF);
   const uint32_t offset = phys_address - BIOS_BASE;
-  uint32_t existing_value;
-  std::memcpy(&existing_value, &image[offset], sizeof(existing_value));
-  uint32_t new_value = (existing_value & ~mask) | value;
-  std::memcpy(&image[offset], &new_value, sizeof(new_value));
+  const uint32_t existing_value = LoadLE32(&image[offset]);
+  const uint32_t new_value = (existing_value & ~mask) | value;
+  StoreLE32(&image[offset], new_value);
 }
 
 bool PatchBIOSFastBoot(uint8_t* image, uint32_t image_size, const Hash& hash)
