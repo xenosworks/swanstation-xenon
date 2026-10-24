@@ -198,6 +198,8 @@ static bool env_cb(unsigned cmd, void* data)
         v->value = opt_cpu;
       else if (!strcmp(v->key, "swanstation_CPU_Overclock"))
         v->value = getenv("FE_OVERCLOCK");
+      else
+        v->value = getenv(v->key); /* any other option, such as swanstation_CPU_RecompilerBlockLinking=false */
       return v->value != NULL;
     }
     default:

@@ -6,6 +6,8 @@
 #   polyline                          long GPU poly-lines, compared with tests/gpu_polyline.expected
 #   gte                               every GTE command on pseudo-random registers, compared with
 #                                     tests/gte_ops.expected
+#   cpu                               random blocks of MIPS code (tests/guest/cpu_fuzz.c) run from random registers; the
+#                                     checksum after every block is compared with tests/cpu_fuzz.expected
 #   display                           pseudo-random VRAM shown in 15-bit and 24-bit colour, progressive
 #                                     and interlaced; the checksum of each last frame is compared with
 #                                     tests/display_modes.expected
@@ -90,7 +92,7 @@ run_rom()
   dir="$WORK/bios-$2"
   rm -rf "$dir"
   mkdir -p "$dir"
-  python3 "$TESTS/guest/mkrom.py" "$WORK/$1.rom" "$dir/bios.bin" "$2" "$3"
+  python3 "$TESTS/guest/mkrom.py" "$WORK/$1.rom" "$dir/bios.bin" "$2" "$3" ${ROMCOUNT:-}
   rc=0
   FE_DIR="$dir" timeout "$TIMEOUT" "$WORK/frontend" "$CORE" "$4" ${5:-} > "$WORK/run.log" 2>&1 || rc=$?
   rm -rf "$dir"
@@ -148,6 +150,38 @@ case "$SUITE" in
       exit 1
     fi
     echo "display: the output matches"
+    ;;
+
+  cpu)
+    build_rom cpu_fuzz
+    : > "$WORK/cpu.out"
+    # Seeds 1 to 4 include blocks that rewrite themselves as they run, each run once; 5 and 6 don't, and run each once or
+    # twice. The cached interpreter doesn't see a rewrite of the block it runs, so it only runs 5 and 6. Memory
+    # exceptions are on, so address errors and bus errors are raised as the interpreter raises them.
+    configs="1:0x80000FFF 2:0x80000FFF 3:0x80000FFF 4:0x80000FFF 5:0x1FF 6:0x1FF"
+    [ "$FE_CPU" = CachedInterpreter ] && configs="5:0x1FF 6:0x1FF"
+    for c in $configs; do
+      seed=${c%%:*}
+      mode=${c#*:}
+      if ! ROMCOUNT=150 RAMDUMP=0x160000:150 swanstation_CPU_RecompilerMemoryExceptions=true run_rom cpu_fuzz "$seed" "$mode" 200; then
+        echo "cpu: seed $seed failed"
+        exit 1
+      fi
+      grep -E '^[0-9a-f]{8} [0-9a-f]{8}$' "$WORK/run.log" | sed "s/^/seed $seed /" >> "$WORK/cpu.out" || true
+    done
+    if [ "${UPDATE_EXPECTED:-}" = 1 ]; then
+      cp "$WORK/cpu.out" "$TESTS/cpu_fuzz.expected"
+      echo "cpu: wrote tests/cpu_fuzz.expected"
+      exit 0
+    fi
+    expected="seed [1-6] "
+    [ "$FE_CPU" = CachedInterpreter ] && expected="seed [56] "
+    if ! tr -d '\r' < "$TESTS/cpu_fuzz.expected" | grep "^$expected" | diff - "$WORK/cpu.out" > "$WORK/cpu.diff"; then
+      head -20 "$WORK/cpu.diff"
+      echo "cpu: the checksums differ from tests/cpu_fuzz.expected"
+      exit 1
+    fi
+    echo "cpu: the checksums match"
     ;;
 
   regfuzz)
