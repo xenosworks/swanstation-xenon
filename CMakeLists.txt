@@ -176,3 +176,8 @@ endif()
 enable_testing()
 add_subdirectory(dep)
 add_subdirectory(src)
+
+# The Xbox 360 through xsdk: the test host, a .xex built from tests/harness/frontend.c.
+if(XSDK)
+  add_subdirectory(tests/xenon)
+endif()

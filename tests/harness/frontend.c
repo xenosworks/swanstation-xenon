@@ -52,6 +52,50 @@
 #define dlsym(h, name) ((void*)GetProcAddress((HMODULE)(h), name))
 #define dlerror() "LoadLibrary failed"
 #define alarm(s) ((void)0)
+#elif defined(__XSDK__)
+#include <unistd.h>
+
+/* The console loads no shared libraries: the core is linked in, and dlsym looks its entry points up in a table. */
+struct xsdk_symbol
+{
+  const char* name;
+  void* function;
+};
+
+static const struct xsdk_symbol xsdk_symbols[] = {
+  {"retro_deinit", (void*)retro_deinit},
+  {"retro_get_memory_data", (void*)retro_get_memory_data},
+  {"retro_init", (void*)retro_init},
+  {"retro_load_game", (void*)retro_load_game},
+  {"retro_run", (void*)retro_run},
+  {"retro_serialize", (void*)retro_serialize},
+  {"retro_serialize_size", (void*)retro_serialize_size},
+  {"retro_set_audio_sample", (void*)retro_set_audio_sample},
+  {"retro_set_audio_sample_batch", (void*)retro_set_audio_sample_batch},
+  {"retro_set_controller_port_device", (void*)retro_set_controller_port_device},
+  {"retro_set_environment", (void*)retro_set_environment},
+  {"retro_set_input_poll", (void*)retro_set_input_poll},
+  {"retro_set_input_state", (void*)retro_set_input_state},
+  {"retro_set_video_refresh", (void*)retro_set_video_refresh},
+  {"retro_unload_game", (void*)retro_unload_game},
+  {"retro_unserialize", (void*)retro_unserialize},
+};
+
+static void* xsdk_dlsym(const char* name)
+{
+  size_t i;
+  for (i = 0; i < sizeof(xsdk_symbols) / sizeof(xsdk_symbols[0]); i++)
+  {
+    if (!strcmp(xsdk_symbols[i].name, name))
+      return xsdk_symbols[i].function;
+  }
+  return NULL;
+}
+
+#define dlopen(path, flags) ((void*)xsdk_symbols)
+#define dlsym(h, name) xsdk_dlsym(name)
+#define dlerror() "no core to load"
+#define alarm(s) ((void)0)
 #else
 #include <dlfcn.h>
 #include <unistd.h>
@@ -757,7 +801,11 @@ static int pad_test(void* h, const char* content)
   return 0;
 }
 
+#ifdef __XSDK__
+int frontend_main(int argc, char** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
   void* h;
   unsigned frames, i;
