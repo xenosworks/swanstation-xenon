@@ -721,9 +721,78 @@ bool CompileBlock(CodeBlock* block, bool allow_flush)
 
 #ifdef WITH_RECOMPILER
 
+#ifdef __XSDK__
+// A frame compiles for COMPILE_BUDGET_TICKS before blocks that would compile wait for a later frame and run
+// interpreted meanwhile; once it has interpreted them for INTERPRET_BUDGET_TICKS, they compile as before, and a block
+// waits COMPILE_WAIT_LIMIT times at most. A scene's first frames compiled 300 to 450 blocks each on Xbox 360, 10 to
+// 19 ms, and missed vblanks (Digimon World, Spyro); and the uncached interpreter is slow enough that hot blocks left
+// waiting cost Spyro a 38 ms frame.
+static constexpr uint32_t COMPILE_BUDGET_TICKS = 49875 * 2;   // 2 ms of the 49.875 MHz time base
+static constexpr uint32_t INTERPRET_BUDGET_TICKS = 49875 * 2; // 2 ms
+static constexpr uint8_t COMPILE_WAIT_LIMIT = 64;
+static constexpr uint32_t COMPILE_WAIT_COUNTS = 1024;
+static uint32_t s_budget_frame;
+static uint32_t s_budget_compile_start;
+static uint32_t s_budget_interpret_start;
+// Interpreting blocks that wait, in time-base ticks.
+static uint32_t s_waiting_ticks;
+// Waits by the block's address; blocks sharing a count are compiled sooner, which is harmless.
+static std::array<uint8_t, COMPILE_WAIT_COUNTS> s_compile_waits;
+
+// Whether the block at key would compile and waits for a later frame instead, which counts the wait: a new block, or
+// one whose code changed since it compiled, as a game's code loaded over older code (Digimon World's movie, from frame
+// 1010, recompiled 380 blocks in a frame). One whose code is the same only revalidates, which costs little.
+static bool CompileWaits(CodeBlockKey key)
+{
+  const uint32_t frame = System::GetFrameNumber();
+  if (frame != s_budget_frame)
+  {
+    s_budget_frame = frame;
+    s_budget_compile_start = xenon_profile.compile_ticks;
+    s_budget_interpret_start = s_waiting_ticks;
+  }
+  if (xenon_profile.compile_ticks - s_budget_compile_start < COMPILE_BUDGET_TICKS ||
+      s_waiting_ticks - s_budget_interpret_start >= INTERPRET_BUDGET_TICKS)
+  {
+    return false;
+  }
+
+  const BlockMap::const_iterator iter = s_blocks.find(key.bits);
+  if (iter != s_blocks.end())
+  {
+    const CodeBlock* block = iter->second;
+    if (!block || !block->invalidated)
+      return false;
+    // RevalidateBlock's test, whether the code in memory is the code compiled.
+    bool changed = false;
+    for (const CodeBlockInstruction& cbi : block->instructions)
+    {
+      uint32_t code = 0;
+      SafeReadInstruction(cbi.pc, &code);
+      changed = changed || code != cbi.instruction.bits;
+    }
+    if (!changed)
+      return false;
+  }
+
+  uint8_t& waits = s_compile_waits[(key.GetPC() >> 2) % COMPILE_WAIT_COUNTS];
+  if (waits >= COMPILE_WAIT_LIMIT)
+    return false;
+  waits++;
+  return true;
+}
+#endif
+
 void FastCompileBlockFunction()
 {
+#ifdef __XSDK__
+  const CodeBlockKey key = GetNextBlockKey();
+  const bool waits = CompileWaits(key);
+  CodeBlock* block = waits ? nullptr : LookupBlock(key, true);
+  const uint32_t interpret_start = xenon_profile_now();
+#else
   CodeBlock* block = LookupBlock(GetNextBlockKey(), true);
+#endif
   if (block)
   {
     s_single_block_asm_dispatcher(block->host_code);
@@ -741,6 +810,10 @@ void FastCompileBlockFunction()
   {
     InterpretUncachedBlock<PGXPMode::Disabled>();
   }
+#ifdef __XSDK__
+  if (waits)
+    s_waiting_ticks += xenon_profile_now() - interpret_start;
+#endif
 }
 
 void InvalidCodeFunction()
@@ -1122,6 +1195,11 @@ void CPU::Recompiler::Thunks::ResolveBranch(CodeBlock* block, void* host_pc, voi
   using namespace CPU::CodeCache;
 
   CodeBlockKey key = GetNextBlockKey();
+#ifdef __XSDK__
+  // Waiting for a later frame: the branch keeps resolving, as it returns to the dispatcher meanwhile.
+  if (CompileWaits(key))
+    return;
+#endif
   CodeBlock* successor_block = LookupBlock(key, false);
   if (!successor_block || (successor_block->invalidated && !RevalidateBlock(successor_block, false)) ||
       !block->can_link || !successor_block->can_link)
