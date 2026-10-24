@@ -18,5 +18,5 @@ if [ "${UPDATE_EXPECTED:-}" = 1 ]; then
 	exit 0
 fi
 
-diff "$HERE/ppc_emitter.expected" "$WORK/emitted.txt"
+tr -d '\r' < "$HERE/ppc_emitter.expected" | diff - "$WORK/emitted.txt"
 echo "emitter: the disassembly matches"
