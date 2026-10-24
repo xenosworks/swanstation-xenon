@@ -222,6 +222,9 @@ void CodeGenerator::EmitEndBlock(bool free_registers /* = true */, bool emit_ret
 
 void CodeGenerator::EmitExceptionExit()
 {
+  // the cycles of what ran before the exception, as the x64 backend adds them
+  AddPendingCycles(false);
+
   // ensure all unflushed registers are written back
   m_register_cache.FlushAllGuestRegisters(false, false);
 
