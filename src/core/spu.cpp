@@ -1,6 +1,7 @@
 #include "spu.h"
 #include "cdrom.h"
 #include "libretro/libretro_audio_stream.h"
+#include "common/little_endian.h"
 #include "common/state_wrapper.h"
 #include "cpu_core.h"
 #include "dma.h"
@@ -702,7 +703,7 @@ void SPU::CheckForLateRAMIRQs()
 void SPU::WriteToCaptureBuffer(uint32_t index, int16_t value)
 {
   const uint32_t ram_address = (index * CAPTURE_BUFFER_SIZE_PER_CHANNEL) | static_cast<uint16_t>(m_capture_buffer_position);
-  std::memcpy(&m_ram[ram_address], &value, sizeof(value));
+  StoreLE16(&m_ram[ram_address], static_cast<uint16_t>(value));
   if (IsRAMIRQTriggerable() && CheckRAMIRQ(ram_address))
   {
     SPU_TriggerRAMIRQ();
@@ -718,8 +719,7 @@ void SPU::IncrementCaptureBufferPosition()
 
 void ALWAYS_INLINE SPU::ExecuteFIFOReadFromRAM(TickCount& ticks)
 {
-  uint16_t value;
-  std::memcpy(&value, &m_ram[m_transfer_address], sizeof(uint16_t));
+  const uint16_t value = LoadLE16(&m_ram[m_transfer_address]);
   m_transfer_address = (m_transfer_address + sizeof(uint16_t)) & RAM_MASK;
   m_transfer_fifo.Push(value);
   ticks -= TRANSFER_TICKS_PER_HALFWORD;
@@ -732,8 +732,7 @@ void ALWAYS_INLINE SPU::ExecuteFIFOReadFromRAM(TickCount& ticks)
 
 void ALWAYS_INLINE SPU::ExecuteFIFOWriteToRAM(TickCount& ticks)
 {
-  uint16_t value = m_transfer_fifo.Pop();
-  std::memcpy(&m_ram[m_transfer_address], &value, sizeof(uint16_t));
+  StoreLE16(&m_ram[m_transfer_address], m_transfer_fifo.Pop());
   m_transfer_address = (m_transfer_address + sizeof(uint16_t)) & RAM_MASK;
   ticks -= TRANSFER_TICKS_PER_HALFWORD;
 
@@ -869,6 +868,15 @@ void SPU::UpdateDMARequest()
   g_dma.SetRequest(DMA::Channel::SPU, m_SPUSTAT.dma_request);
 }
 
+// The transfer FIFO holds values; the words DMA moves hold little-endian bytes.
+ALWAYS_INLINE static void SwapHalfwordsLE(uint16_t* halfwords, uint32_t count)
+{
+#ifdef MSB_FIRST
+  for (uint32_t i = 0; i < count; i++)
+    halfwords[i] = SwapLE16(halfwords[i]);
+#endif
+}
+
 void SPU::DMARead(uint32_t* words, uint32_t word_count)
 {
   /*
@@ -923,13 +931,17 @@ void SPU::DMARead(uint32_t* words, uint32_t word_count)
     if (size > 0)
     {
       m_transfer_fifo.PopRange(halfwords, size);
+      SwapHalfwordsLE(halfwords, size);
       fill_value = halfwords[size - 1];
     }
 
     std::fill_n(&halfwords[size], halfword_count - size, fill_value);
   }
   else
+  {
     m_transfer_fifo.PopRange(halfwords, halfword_count);
+    SwapHalfwordsLE(halfwords, halfword_count);
+  }
 
   UpdateDMARequest();
   UpdateTransferEvent();
@@ -941,7 +953,12 @@ void SPU::DMAWrite(const uint32_t* words, uint32_t word_count)
   uint32_t halfword_count = word_count * 2;
 
   const uint32_t words_to_transfer = std::min(m_transfer_fifo.GetSpace(), halfword_count);
+#ifdef MSB_FIRST
+  for (uint32_t i = 0; i < words_to_transfer; i++)
+    m_transfer_fifo.Push(LoadLE16(&halfwords[i]));
+#else
   m_transfer_fifo.PushRange(halfwords, words_to_transfer);
+#endif
 
   UpdateDMARequest();
   UpdateTransferEvent();
@@ -1484,16 +1501,14 @@ int16_t SPU::ReverbRead(uint32_t address, int32_t offset)
   // TODO: This should check interrupts.
   const uint32_t real_address = ReverbMemoryAddress((address << 2) + offset);
 
-  int16_t data;
-  std::memcpy(&data, &m_ram[real_address], sizeof(data));
-  return data;
+  return static_cast<int16_t>(LoadLE16(&m_ram[real_address]));
 }
 
 void SPU::ReverbWrite(uint32_t address, int16_t data)
 {
   // TODO: This should check interrupts.
   const uint32_t real_address = ReverbMemoryAddress(address << 2);
-  std::memcpy(&m_ram[real_address], &data, sizeof(data));
+  StoreLE16(&m_ram[real_address], static_cast<uint16_t>(data));
 }
 
 // Zeroes optimized out; middle removed too(it's 16384)

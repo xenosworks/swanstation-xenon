@@ -1,4 +1,5 @@
 #include "mdec.h"
+#include "common/little_endian.h"
 #include "common/state_wrapper.h"
 #include "cpu_core.h"
 #include "dma.h"
@@ -120,7 +121,12 @@ void MDEC::DMARead(uint32_t* words, uint32_t word_count)
   const uint32_t words_to_read = std::min(word_count, m_data_out_fifo.GetSize());
   if (words_to_read > 0)
   {
+#ifdef MSB_FIRST
+    for (uint32_t i = 0; i < words_to_read; i++)
+      StoreLE32(&words[i], m_data_out_fifo.Pop());
+#else
     m_data_out_fifo.PopRange(words, words_to_read);
+#endif
     words += words_to_read;
     word_count -= words_to_read;
   }
@@ -132,7 +138,12 @@ void MDEC::DMARead(uint32_t* words, uint32_t word_count)
 void MDEC::DMAWrite(const uint32_t* words, uint32_t word_count)
 {
   const uint32_t halfwords_to_write = std::min(word_count * 2, m_data_in_fifo.GetSpace() & ~uint32_t(1));
+#ifdef MSB_FIRST
+  for (uint32_t i = 0; i < halfwords_to_write; i++)
+    m_data_in_fifo.Push(LoadLE16(reinterpret_cast<const uint16_t*>(words) + i));
+#else
   m_data_in_fifo.PushRange(reinterpret_cast<const uint16_t*>(words), halfwords_to_write);
+#endif
   Execute();
 }
 
@@ -874,12 +885,23 @@ void MDEC::HandleSetQuantTableCommand()
   std::array<uint16_t, 32> packed_data;
   m_data_in_fifo.PopRange(packed_data.data(), static_cast<uint32_t>(packed_data.size()));
   m_remaining_halfwords -= 32;
+  // The FIFO holds values; the tables are bytes, low byte of each halfword first.
+#ifdef MSB_FIRST
+  for (uint32_t i = 0; i < packed_data.size(); i++)
+    StoreLE16(&m_iq_y[i * 2], packed_data[i]);
+#else
   std::memcpy(m_iq_y.data(), packed_data.data(), m_iq_y.size());
+#endif
 
   if (m_remaining_halfwords > 0)
   {
     m_data_in_fifo.PopRange(packed_data.data(), static_cast<uint32_t>(packed_data.size()));
+#ifdef MSB_FIRST
+    for (uint32_t i = 0; i < packed_data.size(); i++)
+      StoreLE16(&m_iq_uv[i * 2], packed_data[i]);
+#else
     std::memcpy(m_iq_uv.data(), packed_data.data(), m_iq_uv.size());
+#endif
   }
 }
 

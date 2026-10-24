@@ -1,5 +1,6 @@
 #include "cdrom.h"
 #include "common/cd_image.h"
+#include "common/little_endian.h"
 #include "common/platform.h"
 #include "common/state_wrapper.h"
 #include "dma.h"
@@ -2338,8 +2339,7 @@ static int16_t GetPeakVolume(const uint8_t* raw_sector, uint8_t channel)
 
   for (uint32_t i = 0; i < NUM_SAMPLES; i += 2)
   {
-    int16_t sample;
-    std::memcpy(&sample, current_ptr, sizeof(sample));
+    const int16_t sample = static_cast<int16_t>(LoadLE16(current_ptr));
     peak = std::max(peak, sample);
     current_ptr += sizeof(int16_t) * 2;
   }
@@ -2403,9 +2403,8 @@ void CDROM::ProcessCDDASector(const uint8_t* raw_sector, const CDImage::SubChann
   const uint8_t* sector_ptr = raw_sector;
   for (uint32_t i = 0; i < num_samples; i++)
   {
-    int16_t samp_left, samp_right;
-    std::memcpy(&samp_left, sector_ptr, sizeof(samp_left));
-    std::memcpy(&samp_right, sector_ptr + sizeof(int16_t), sizeof(samp_right));
+    const int16_t samp_left = static_cast<int16_t>(LoadLE16(sector_ptr));
+    const int16_t samp_right = static_cast<int16_t>(LoadLE16(sector_ptr + sizeof(int16_t)));
     sector_ptr += sizeof(int16_t) * 2;
     AddCDAudioFrame(samp_left, samp_right);
   }
