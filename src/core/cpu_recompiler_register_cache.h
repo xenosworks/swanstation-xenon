@@ -5,6 +5,7 @@
 #include <array>
 #include <optional>
 #include <stack>
+#include <vector>
 #include <tuple>
 
 namespace CPU::Recompiler {
@@ -340,7 +341,7 @@ private:
     Value next_load_delay_value{};
   } m_state;
 
-  std::stack<RegAllocState> m_state_stack;
+  std::stack<RegAllocState, std::vector<RegAllocState>> m_state_stack;
 };
 
 } // namespace CPU::Recompiler
