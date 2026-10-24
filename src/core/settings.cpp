@@ -81,6 +81,7 @@ void Settings::Load(LibretroSettingsInterface& si)
 
   cpu_recompiler_block_linking = si.GetBoolValue("CPU", "RecompilerBlockLinking", true);
   cpu_recompiler_icache = si.GetBoolValue("CPU", "RecompilerICache", false);
+  cpu_recompiler_memory_exceptions = si.GetBoolValue("CPU", "RecompilerMemoryExceptions", false);
   cpu_fastmem_mode = ParseCPUFastmemMode(
                        si.GetStringValue("CPU", "FastmemMode", GetCPUFastmemModeName(DEFAULT_CPU_FASTMEM_MODE)).c_str())
                        .value_or(DEFAULT_CPU_FASTMEM_MODE);
