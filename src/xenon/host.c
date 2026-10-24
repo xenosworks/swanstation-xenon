@@ -1,9 +1,18 @@
 // swanstation: SwanStation on the Xbox 360, its libretro core linked in and driven from here (xsdk's
-// docs/scope/62-swanstation.md). host.txt beside the .xex says what to run, one KEY=VALUE a line:
-//   game=game:\Spyro the Dragon.cue   the disc image, from the title's folder or any other
-//   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (no fastmem
-//   yet) frames=1800                       ends the title after that many frames; without it, it runs until Xbox Home
+// docs/scope/62-swanstation.md). It opens the game picker (picker.cpp) on the games in games\ beside the .xex and on
+// USB drives; holding Back and Start for a second in a game opens the pause menu. host.txt beside the .xex, which can
+// be left out, changes that, one KEY=VALUE a line:
+//   game=game:\Spyro the Dragon.cue   starts that disc image, from any folder, without the picker
+//   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (the
+//                                     default; no fastmem yet)
+//   frames=1800                       ends the title after that many frames of game=; without it, it runs until
+//                                     Xbox Home
 //   capture=600,1200                  writes the core's frame at those frames as capture_<frame>.ppm beside the .xex
+//   check=list                        the picker's listing check (picker_check_list)
+//   check=reload                      starts game= four times over, 300 frames each or frames=, and checks each
+//                                     start ended on a frame that isn't black
+//   check=shots                       opens the pause menu SHOT_FRAME frames into game= and writes it as a PPM, then
+//                                     the picker's (picker_shots)
 // The BIOS goes in the title's folder too, where the core looks for one by its contents. Frames are drawn 4:3 in the
 // middle of a 1280x720 display, pads are the PlayStation's digital pad, and the sound plays from the front left and
 // right speakers. Every 300 frames the log gives the time the core took for a frame, the scope's measure of full
@@ -20,6 +29,7 @@
 #include <time.h>
 
 #include "common/xenon_profile.h"
+#include "picker.h"
 #include "swanstation_shaders.h"
 #include "xsdk/audio.h"
 #include "xsdk/gpu.h"
@@ -57,6 +67,11 @@ enum {
 	AUDIO_WAIT_MS = 100,
 	// A frame of the core's past this, beyond a 60 Hz frame and then some, is logged with where its time went.
 	SLOW_FRAME_US = 20000,
+	// How long Back and Start are held together to open the pause menu.
+	PAUSE_HOLD_US = 1000000,
+	RELOAD_RUNS = 4,
+	RELOAD_FRAMES = 300,
+	SHOT_FRAME = 600,
 };
 
 // How far the feeder's step leans with the ring's fill, either way: more than the 0.3% between the display's 60 Hz and
@@ -82,7 +97,14 @@ typedef struct {
 	uint32_t frames;
 	uint32_t captures[MAX_CAPTURES];
 	uint32_t capture_count;
+	char check[LINE_BYTES];
 } Config;
+
+// How a game's run ended: frames= reached or the display failed, or the pause menu's Back to games.
+typedef enum {
+	RUN_ENDED,
+	RUN_TO_GAMES,
+} RunEnd;
 
 typedef struct {
 	XsdkShader vertex;
@@ -132,6 +154,13 @@ static bool frames_running;
 static uint32_t upload_ticks;
 // The joypad's buttons as a bitmask of libretro's ids, read once a frame.
 static int16_t joypad;
+// When Back and Start were first held together, 0 while they aren't; and whether they've been held long enough.
+static uint64_t pause_held_since;
+static bool pause_requested;
+// After a menu, the game sees no buttons until every one is let go, so the A that resumed isn't the game's Cross.
+static bool held_since_menu;
+// check=reload: whether the core's last frame had a pixel that isn't black.
+static bool frame_lit;
 // The core's sound, stereo 16-bit frames at its rate, from the core's thread to the feeder, which resamples it to the
 // console's 48 kHz: a ring with a writer each side, counting the frames put in and taken out.
 static int16_t audio_ring[AUDIO_RING_FRAMES][2];
@@ -159,14 +188,12 @@ static void trim_line(char *line)
 		line[--length_bytes] = '\0';
 }
 
-static bool read_config(void)
+static void read_config(void)
 {
-	snprintf(config.cpu, sizeof config.cpu, "CachedInterpreter");
+	snprintf(config.cpu, sizeof config.cpu, "Recompiler");
 	FILE *const file = fopen(CONFIG_NAME, "r");
-	if (!file) {
-		xsdk_log_write("swanstation: no %s beside the .xex", CONFIG_NAME);
-		return false;
-	}
+	if (!file)
+		return;
 	char line[LINE_BYTES];
 	while (fgets(line, sizeof line, file)) {
 		trim_line(line);
@@ -186,14 +213,11 @@ static bool read_config(void)
 				if (*next != ',')
 					break;
 			}
+		} else if (!strcmp(line, "check")) {
+			snprintf(config.check, sizeof config.check, "%s", value + 1);
 		}
 	}
 	fclose(file);
-	if (!config.game[0]) {
-		xsdk_log_write("swanstation: %s names no game=", CONFIG_NAME);
-		return false;
-	}
-	return true;
 }
 
 static void core_log(enum retro_log_level level, const char *format, ...)
@@ -307,6 +331,16 @@ static void video_refresh(const void *data, unsigned width, unsigned height, siz
 	const uint32_t start = xenon_profile_now();
 	copy_frame(data, width, height, pitch);
 	upload_ticks += xenon_profile_now() - start;
+	if (!strcmp(config.check, "reload")) {
+		const unsigned pixel_bytes = pixel_format == RETRO_PIXEL_FORMAT_XRGB8888 ? 4 : 2;
+		frame_lit = false;
+		for (unsigned y = 0; y < height && !frame_lit; y++) {
+			const uint8_t *const row = (const uint8_t *)data + y * pitch;
+			// XRGB8888's X, the first byte of each big-endian word, doesn't count.
+			for (unsigned x = 0; x < width * pixel_bytes && !frame_lit; x++)
+				frame_lit = row[x] && (pixel_bytes == 2 || x % 4 != 0);
+		}
+	}
 }
 
 // Copies the core's frame into the texture, made again whenever the frame's size or format changes.
@@ -419,6 +453,9 @@ static uint32_t audio_feed(void *context)
 static bool open_audio(double rate_hz)
 {
 	audio_rate_hz = rate_hz;
+	// The last game's sound left in the ring isn't this one's.
+	audio_head = 0;
+	audio_tail = 0;
 	NTSTATUS status = xsdk_audio_open(0);
 	if (!NT_SUCCESS(status)) {
 		xsdk_log_write("swanstation: xsdk_audio_open failed: 0x%08X", (unsigned)status);
@@ -458,14 +495,32 @@ static void log_audio(void)
 	audio_dropped = 0;
 }
 
+// Reads the pad for the core. Back and Start held together reach it as neither, so the game neither pauses nor takes
+// Select under the pause menu, and held a second they ask for the menu.
 static void input_poll(void)
 {
 	INPUT_STATE input = { 0 };
 	joypad = 0;
 	if (XamInputGetState(0, 0, &input) != ERROR_SUCCESS)
 		return;
+	uint16_t buttons = input.gamepad.buttons;
+	if (held_since_menu) {
+		if (buttons || input.gamepad.left_trigger >= TRIGGER_PRESSED || input.gamepad.right_trigger >= TRIGGER_PRESSED)
+			return;
+		held_since_menu = false;
+	}
+	const uint16_t combination = INPUT_GAMEPAD_BACK | INPUT_GAMEPAD_START;
+	if ((buttons & combination) == combination) {
+		const uint64_t now = now_us();
+		if (!pause_held_since)
+			pause_held_since = now;
+		pause_requested = now - pause_held_since >= PAUSE_HOLD_US;
+		buttons &= (uint16_t)~combination;
+	} else {
+		pause_held_since = 0;
+	}
 	for (unsigned id = 0; id < sizeof joypad_buttons / sizeof joypad_buttons[0]; id++) {
-		if (joypad_buttons[id] && input.gamepad.buttons & joypad_buttons[id])
+		if (joypad_buttons[id] && buttons & joypad_buttons[id])
 			joypad |= (int16_t)(1 << id);
 	}
 	if (input.gamepad.left_trigger >= TRIGGER_PRESSED)
@@ -539,9 +594,9 @@ static void free_screen(void)
 	xsdk_shader_free(&screen.vertex);
 }
 
-static void draw(uint32_t address, uint32_t width, uint32_t height)
+// Draws the core's last frame into the target set.
+static void draw_frame(void)
 {
-	xsdk_gpu_set_target(width, height);
 	if (screen.has_texture) {
 		xsdk_gpu_set_shaders(&screen.vertex, &screen.pixel);
 		xsdk_built_shader_set_literals(&frame_vert);
@@ -550,6 +605,12 @@ static void draw(uint32_t address, uint32_t width, uint32_t height)
 		xsdk_gpu_set_vertices(0, xsdk_gpu_address(screen.vertices), VERTICES_BYTES);
 		xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_STRIP, CORNERS);
 	}
+}
+
+static void draw(uint32_t address, uint32_t width, uint32_t height)
+{
+	xsdk_gpu_set_target(width, height);
+	draw_frame();
 	xsdk_gpu_resolve(address, width, height, BLACK);
 	screen.fence = xsdk_gpu_fence();
 }
@@ -637,15 +698,29 @@ static void log_slow_frame(uint64_t took_us, const Counts *before)
 		ticks_ms(before->spu, after.spu));
 }
 
-// Runs the core a frame at a time, each shown as the display's next, until frames= or the title is left; logs the
-// core's time a frame over each REPORT_FRAMES, and each slow frame.
-static void run(uint32_t width, uint32_t height, double core_fps)
+// Runs the core a frame at a time, each shown as the display's next, until frames=, the title is left, or the pause
+// menu goes back to the games; logs the core's time a frame over each REPORT_FRAMES, and each slow frame.
+static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *game_path)
 {
 	uint64_t period_start = now_us();
 	uint64_t core_us = 0;
 	uint64_t longest_core_us = 0;
 	frames_running = true;
 	for (frame_number = 0; config.frames == 0 || frame_number < config.frames; frame_number++) {
+		if (picker_shots && frame_number == SHOT_FRAME)
+			pause_requested = true;
+		if (pause_requested) {
+			const PauseChoice choice = picker_pause(width, height, game_path, draw_frame);
+			// The menu's draws read the frame's texture too, and the next upload waits for them.
+			screen.fence = xsdk_gpu_fence();
+			pause_requested = false;
+			pause_held_since = 0;
+			held_since_menu = true;
+			if (choice == PAUSE_TO_GAMES)
+				return RUN_TO_GAMES;
+			if (choice == PAUSE_RESET)
+				retro_reset();
+		}
 		const Counts before = counts_now();
 		const uint64_t start = now_us();
 		retro_run();
@@ -659,7 +734,7 @@ static void run(uint32_t width, uint32_t height, double core_fps)
 		const NTSTATUS status = xsdk_present_begin(&address, BEGIN_TIMEOUT_MS);
 		if (!NT_SUCCESS(status)) {
 			xsdk_log_write("swanstation: xsdk_present_begin failed: 0x%08X", (unsigned)status);
-			return;
+			return RUN_ENDED;
 		}
 		draw(address, width, height);
 		xsdk_present_end();
@@ -677,14 +752,78 @@ static void run(uint32_t width, uint32_t height, double core_fps)
 			longest_core_us = 0;
 		}
 	}
+	return RUN_ENDED;
+}
+
+// Starts the game at path and runs it until it ends, how it ended in *end; false if the core couldn't load it.
+static bool play_game(uint32_t width, uint32_t height, const char *path, RunEnd *end)
+{
+	xsdk_log_write("swanstation: starting %s", path);
+	const struct retro_game_info game = { .path = path };
+	if (!retro_load_game(&game)) {
+		xsdk_log_write("swanstation: the core couldn't load %s", path);
+		return false;
+	}
+	struct retro_system_av_info av;
+	retro_get_system_av_info(&av);
+	xsdk_log_write("swanstation: loaded; %.2f fps, sound at %.0f Hz", av.timing.fps, av.timing.sample_rate);
+	const bool sound = open_audio(av.timing.sample_rate);
+	held_since_menu = true;
+	*end = run(width, height, av.timing.fps, path);
+	if (sound)
+		close_audio();
+	retro_unload_game();
+	// The counts name events by the unloaded game's strings, freed with it; the next game's are its own.
+	memset(&xenon_profile, 0, sizeof xenon_profile);
+	return true;
+}
+
+// Plays game= if host.txt names one, then what the picker starts, until frames= ends a game, the display fails, or the
+// picker is left.
+static void play(uint32_t width, uint32_t height)
+{
+	char path[LINE_BYTES];
+	bool start_failed = false;
+	bool from_config = config.game[0] != '\0';
+	for (;;) {
+		if (from_config)
+			snprintf(path, sizeof path, "%s", config.game);
+		else if (!picker_choose(width, height, start_failed, path, sizeof path))
+			return;
+		from_config = false;
+		RunEnd end = RUN_TO_GAMES;
+		start_failed = !play_game(width, height, path, &end);
+		if (end == RUN_ENDED)
+			return;
+	}
+}
+
+// check=reload: starts game= RELOAD_RUNS times over, each for frames= or RELOAD_FRAMES, and passes if every start ran
+// and ended on a frame that isn't black, which a recompiler that didn't set itself up again wouldn't show.
+static bool check_reload(uint32_t width, uint32_t height)
+{
+	if (!config.frames)
+		config.frames = RELOAD_FRAMES;
+	bool passed = true;
+	for (uint32_t i = 0; i < RELOAD_RUNS; i++) {
+		frame_lit = false;
+		RunEnd end;
+		const bool started = play_game(width, height, config.game, &end);
+		const char *outcome = "failed";
+		if (started)
+			outcome = frame_lit ? "ended on a lit frame" : "ended on a black frame";
+		xsdk_log_write("swanstation: reload check: start %u %s", (unsigned)(i + 1), outcome);
+		passed = passed && started && frame_lit;
+	}
+	xsdk_log_write("swanstation: reload check: %s", passed ? "PASS" : "FAIL");
+	return passed;
 }
 
 int main(void)
 {
-	if (!read_config())
-		return 1;
-	xsdk_log_write("swanstation: %s with the %s CPU, %s, on hardware thread %u", config.game, config.cpu,
-		config.frames ? "for a fixed count of frames" : "until Xbox Home", (unsigned)xsdk_thread_hardware_thread());
+	read_config();
+	xsdk_log_write("swanstation: %s, the %s CPU, on hardware thread %u", config.game[0] ? config.game : "the picker",
+		config.cpu, (unsigned)xsdk_thread_hardware_thread());
 	const NTSTATUS splash = xsdk_splash_show(SPLASH_MS);
 	if (!NT_SUCCESS(splash))
 		xsdk_log_write("swanstation: xsdk_splash_show failed: 0x%08X", (unsigned)splash);
@@ -700,6 +839,8 @@ int main(void)
 		status = xsdk_present_open(XSDK_DISPLAY_720P, BUFFERS, SWAP_INTERVAL, &width, &height);
 		if (!NT_SUCCESS(status)) {
 			xsdk_log_write("swanstation: xsdk_present_open failed: 0x%08X", (unsigned)status);
+		} else if (!picker_open()) {
+			xsdk_present_close();
 		} else {
 			retro_set_environment(environment);
 			retro_set_video_refresh(video_refresh);
@@ -708,21 +849,17 @@ int main(void)
 			retro_set_input_poll(input_poll);
 			retro_set_input_state(input_state);
 			retro_init();
-			const struct retro_game_info game = { .path = config.game };
-			if (retro_load_game(&game)) {
-				struct retro_system_av_info av;
-				retro_get_system_av_info(&av);
-				xsdk_log_write("swanstation: loaded; %.2f fps, sound at %.0f Hz", av.timing.fps, av.timing.sample_rate);
-				const bool sound = open_audio(av.timing.sample_rate);
-				run(width, height, av.timing.fps);
-				if (sound)
-					close_audio();
-				retro_unload_game();
-				result = 0;
+			picker_shots = !strcmp(config.check, "shots");
+			if (!strcmp(config.check, "list")) {
+				result = picker_check_list() ? 0 : 1;
+			} else if (!strcmp(config.check, "reload")) {
+				result = check_reload(width, height) ? 0 : 1;
 			} else {
-				xsdk_log_write("swanstation: the core couldn't load %s", config.game);
+				play(width, height);
+				result = 0;
 			}
 			retro_deinit();
+			picker_close();
 			xsdk_present_close();
 		}
 	}
