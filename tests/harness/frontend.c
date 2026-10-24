@@ -264,6 +264,21 @@ static uint32_t rng(void)
   return rng_state >> 8;
 }
 
+/* The core's RAM and save states are little-endian on every host, so a big-endian one assembles words from bytes. */
+#if defined(MSB_FIRST) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+static uint32_t load_le32(const unsigned char* p)
+{
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+#else
+static uint32_t load_le32(const unsigned char* p)
+{
+  uint32_t value;
+  memcpy(&value, p, 4);
+  return value;
+}
+#endif
+
 /* Offset of the first byte after section marker name, or 0 if there is none. */
 static size_t section_start(const unsigned char* state, size_t size, const char* name)
 {
@@ -271,8 +286,7 @@ static size_t section_start(const unsigned char* state, size_t size, const char*
   size_t p;
   for (p = 0; p + mlen + 4 < size; p++)
   {
-    uint32_t l;
-    memcpy(&l, state + p, 4);
+    const uint32_t l = load_le32(state + p);
     if (l == mlen && !memcmp(state + p + 4, name, mlen))
       return p + 4 + mlen;
   }
@@ -304,8 +318,7 @@ static void corrupt_state(unsigned char* buf, const unsigned char* orig, size_t 
 
     for (p = 0; p + mlen + 4 < size; p++)
     {
-      uint32_t l;
-      memcpy(&l, orig + p, 4);
+      const uint32_t l = load_le32(orig + p);
       if (l == mlen && !memcmp(orig + p + 4, markers[mi], mlen))
       {
         found++;
@@ -669,8 +682,7 @@ static size_t find_marker(const unsigned char* buf, size_t size, const char* nam
   size_t p;
   for (p = 0; p + len + 4 < size; p++)
   {
-    uint32_t l;
-    memcpy(&l, buf + p, 4);
+    const uint32_t l = load_le32(buf + p);
     if (l == len && !memcmp(buf + p + 4, name, len))
       return p + 4 + len;
   }
@@ -890,8 +902,7 @@ int main(int argc, char** argv)
     }
     for (k = 0; k < count; k++)
     {
-      uint32_t w;
-      memcpy(&w, ram + offset + k * 4, 4);
+      const uint32_t w = load_le32(ram + offset + k * 4);
       printf("%08lx %08x\n", offset + k * 4, (unsigned)w);
     }
   }
