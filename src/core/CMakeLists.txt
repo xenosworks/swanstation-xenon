@@ -161,6 +161,14 @@ elseif(${CPU_ARCH} STREQUAL "aarch64")
   )
   target_link_libraries(core PUBLIC vixl)
   message("Building AArch64 recompiler")
+elseif(${CPU_ARCH} STREQUAL "powerpc")
+  target_compile_definitions(core PUBLIC "WITH_RECOMPILER=1")
+  target_sources(core PRIVATE ${RECOMPILER_SRCS}
+    cpu_recompiler_code_generator_ppc.cpp
+    cpu_recompiler_emitter_ppc.cpp
+    cpu_recompiler_emitter_ppc.h
+  )
+  message("Building PowerPC recompiler")
 else()
   message("Not building recompiler")
 endif()

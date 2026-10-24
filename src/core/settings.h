@@ -126,8 +126,13 @@ struct Settings
 
   ALWAYS_INLINE bool IsUsingFastmem() const
   {
+#ifdef __PPC__
+    // The PowerPC recompiler has no fastmem yet.
+    return false;
+#else
     return (cpu_fastmem_mode != CPUFastmemMode::Disabled && cpu_execution_mode == CPUExecutionMode::Recompiler &&
             !cpu_recompiler_memory_exceptions);
+#endif
   }
 
   float GetDisplayAspectRatioValue() const;
@@ -202,6 +207,8 @@ struct Settings
   static constexpr CPUExecutionMode DEFAULT_CPU_EXECUTION_MODE = CPUExecutionMode::Recompiler;
 #ifdef WITH_MMAP_FASTMEM
   static constexpr CPUFastmemMode DEFAULT_CPU_FASTMEM_MODE = CPUFastmemMode::MMap;
+#elif defined(__PPC__)
+  static constexpr CPUFastmemMode DEFAULT_CPU_FASTMEM_MODE = CPUFastmemMode::Disabled;
 #else
   static constexpr CPUFastmemMode DEFAULT_CPU_FASTMEM_MODE = CPUFastmemMode::LUT;
 #endif

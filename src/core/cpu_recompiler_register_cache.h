@@ -193,7 +193,7 @@ struct Value
   {
 #if defined(CPU_AARCH64) || defined(CPU_X64)
     return FromConstant(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pointer)), RegSize_64);
-#elif defined(CPU_AARCH32)
+#elif defined(CPU_AARCH32) || defined(CPU_POWERPC)
     return FromConstant(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pointer)), RegSize_32);
 #else
     return FromConstant(0, RegSize_32);

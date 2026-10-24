@@ -23,6 +23,10 @@
 #include "vixl/aarch64/constants-aarch64.h"
 #include "vixl/aarch64/macro-assembler-aarch64.h"
 
+#elif defined(CPU_POWERPC)
+
+#include "cpu_recompiler_emitter_ppc.h"
+
 #endif
 
 namespace CPU {
@@ -114,6 +118,21 @@ constexpr RegSize HostPointerSize = RegSize_64;
 // A reasonable "maximum" number of bytes per instruction.
 constexpr uint32_t MAX_NEAR_HOST_BYTES_PER_INSTRUCTION = 64;
 constexpr uint32_t MAX_FAR_HOST_BYTES_PER_INSTRUCTION = 128;
+
+// Alignment of code stoarge.
+constexpr uint32_t CODE_STORAGE_ALIGNMENT = 4096;
+
+#elif defined(CPU_POWERPC)
+
+// CodeEmitter and LabelType are cpu_recompiler_emitter_ppc.h's.
+using HostReg = unsigned;
+constexpr uint32_t HostReg_Count = 32;
+constexpr HostReg HostReg_Invalid = static_cast<HostReg>(HostReg_Count);
+constexpr RegSize HostPointerSize = RegSize_32;
+
+// A reasonable "maximum" number of bytes per instruction.
+constexpr uint32_t MAX_NEAR_HOST_BYTES_PER_INSTRUCTION = 128;
+constexpr uint32_t MAX_FAR_HOST_BYTES_PER_INSTRUCTION = 256;
 
 // Alignment of code stoarge.
 constexpr uint32_t CODE_STORAGE_ALIGNMENT = 4096;

@@ -2976,7 +2976,13 @@ bool CodeGenerator::Compile_cop2(const CodeBlockInstruction& cbi)
     InstructionPrologue(cbi, 1);
 
     Value instruction_bits = Value::FromConstantU32(cbi.instruction.bits & GTE::Instruction::REQUIRED_BITS_MASK);
+#ifdef CPU_POWERPC
+    // the command takes a union by value, which the two PowerPC ABIs pass differently
+    EmitFunctionCall(nullptr, &Thunks::ExecuteGTE, instruction_bits,
+                     Value::FromConstantPtr(reinterpret_cast<const void*>(func)));
+#else
     EmitFunctionCall(nullptr, func, instruction_bits);
+#endif
     AddGTETicks(func_ticks);
 
     InstructionEpilogue(cbi);

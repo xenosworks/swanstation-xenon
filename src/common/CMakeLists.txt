@@ -105,9 +105,9 @@ if(XSDK)
   target_sources(common PRIVATE xsdk_pthread.c)
 endif()
 if(${CPU_ARCH} STREQUAL "powerpc")
-  # Only the recompiler and fastmem use these, and neither is built for PowerPC.
+  # The page fault handler is fastmem's, and PowerPC has none yet.
   get_target_property(common_sources common SOURCES)
-  list(FILTER common_sources EXCLUDE REGEX "^(jit_code_buffer|page_fault_handler)[.]")
+  list(FILTER common_sources EXCLUDE REGEX "^page_fault_handler[.]")
   set_property(TARGET common PROPERTY SOURCES ${common_sources})
 endif()
 target_compile_definitions(common PRIVATE -D__LIBRETRO__)

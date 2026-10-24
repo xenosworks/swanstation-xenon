@@ -27,13 +27,14 @@ static constexpr uint32_t INVALIDATE_THRESHOLD_TO_DISABLE_LINKING = 10;
 
 #ifdef WITH_RECOMPILER
 
-// Currently remapping the code buffer doesn't work in macOS or Haiku.
-#if !defined(__HAIKU__) && !defined(__APPLE__)
+// Currently remapping the code buffer doesn't work in macOS or Haiku. A static array isn't executable on PowerPC, where
+// the code goes in memory mapped for it, or the console's .jit pool.
+#if !defined(__HAIKU__) && !defined(__APPLE__) && !defined(CPU_POWERPC)
 #define USE_STATIC_CODE_BUFFER 1
 #endif
 
-#if defined(CPU_AARCH32)
-// Use a smaller code buffer size on AArch32 to have a better chance of being in range.
+#if defined(CPU_AARCH32) || defined(CPU_POWERPC)
+// Use a smaller code buffer size on AArch32 to have a better chance of being in range; PowerPC's b reaches 32 MB.
 static constexpr uint32_t RECOMPILER_CODE_CACHE_SIZE = 16 * 1024 * 1024;
 static constexpr uint32_t RECOMPILER_FAR_CODE_CACHE_SIZE = 8 * 1024 * 1024;
 #else
@@ -218,8 +219,10 @@ static void RemoveBlockFromHostCodeMap(CodeBlock* block);
 
 static bool InitializeFastmem();
 static void ShutdownFastmem();
+#ifndef CPU_POWERPC
 static Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, void* fault_address,
                                                                    bool is_write);
+#endif
 #ifdef WITH_MMAP_FASTMEM
 static Common::PageFaultHandler::HandlerResult MMapPageFaultHandler(void* exception_pc, void* fault_address,
                                                                     bool is_write);
@@ -948,6 +951,10 @@ void RemoveBlockFromHostCodeMap(CodeBlock* block)
 
 bool InitializeFastmem()
 {
+#ifdef CPU_POWERPC
+  // No page fault handler on PowerPC, so no fastmem (Settings::IsUsingFastmem).
+  return false;
+#else
   const CPUFastmemMode mode = g_settings.cpu_fastmem_mode;
 
 #ifdef WITH_MMAP_FASTMEM
@@ -969,11 +976,14 @@ bool InitializeFastmem()
   Bus::UpdateFastmemViews(mode);
   CPU::UpdateFastmemBase();
   return true;
+#endif
 }
 
 void ShutdownFastmem()
 {
+#ifndef CPU_POWERPC
   Common::PageFaultHandler::RemoveHandler(&s_host_code_map);
+#endif
   Bus::UpdateFastmemViews(CPUFastmemMode::Disabled);
   CPU::UpdateFastmemBase();
 }
@@ -1047,6 +1057,7 @@ Common::PageFaultHandler::HandlerResult MMapPageFaultHandler(void* exception_pc,
 
 #endif
 
+#ifndef CPU_POWERPC
 Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, void* fault_address, bool is_write)
 {
   // use upper_bound to find the next block after the pc
@@ -1088,6 +1099,7 @@ Common::PageFaultHandler::HandlerResult LUTPageFaultHandler(void* exception_pc, 
   Log_ErrorPrintf("Loadstore PC not found for %p in block 0x%08X", exception_pc, block->GetPC());
   return Common::PageFaultHandler::HandlerResult::ExecuteNextHandler;
 }
+#endif // CPU_POWERPC
 
 #endif // WITH_RECOMPILER
 
