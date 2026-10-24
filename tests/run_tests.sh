@@ -4,6 +4,8 @@
 # usage: tests/run_tests.sh core.so suite [args]
 #   mdec                              MDEC decode, compared with tests/mdec_decode.expected
 #   polyline                          long GPU poly-lines, compared with tests/gpu_polyline.expected
+#   gte                               every GTE command on pseudo-random registers, compared with
+#                                     tests/gte_ops.expected
 #   regfuzz [first] [last] [frames]   register fuzzer, one run per seed (default 1 20 120)
 #   statefuzz [first] [last] [iters]  corrupted save states loaded into a fuzzed system (default 1 3 150)
 #   mdecstate                         MDEC states with table commands short of parameters, unknown
@@ -117,6 +119,10 @@ case "$SUITE" in
 
   polyline)
     run_golden gpu_polyline 600 80 4
+    ;;
+
+  gte)
+    run_golden gte_ops 200 160 24
     ;;
 
   regfuzz)

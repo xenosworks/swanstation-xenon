@@ -1,0 +1,25 @@
+# case, checksum, flags (see tests/guest/gte_ops.c)
+0 7c589e88 0
+1 73b9eca8 0
+2 96495d11 0
+3 e3af5f12 0
+4 8ef4d1fc 0
+5 9bf1012e 0
+6 bf51e470 0
+7 40c4cc65 0
+8 d75f8c12 0
+9 fa81b9a8 0
+10 243d9754 0
+11 39270c3b 0
+12 3f5b65ca 0
+13 10238b94 0
+14 293e0d41 0
+15 55f3014c 0
+16 65abb611 0
+17 b40e0459 0
+18 71bbc0b3 0
+19 d7fe86e6 0
+20 27dd5bfa 0
+21 0e94ac6a 0
+22 5bbb0a03 0
+23 c729fef2 0
