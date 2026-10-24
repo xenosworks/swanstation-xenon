@@ -4,6 +4,7 @@
 #include <rthreads/retro_eventcount.h>
 #include <rthreads/rthreads.h>
 #ifdef __XSDK__
+#include "common/xenon_profile.h"
 #include "xsdk/thread.h"
 #endif
 Log_SetChannel(CDROMAsyncReader);
@@ -207,6 +208,9 @@ bool CDROMAsyncReader::WaitForReadToComplete()
   if (!IsUsingThread())
     return m_sector_valid && m_buffers[m_buffer_front].result;
 
+#ifdef __XSDK__
+  XenonProfileScope profile(&xenon_profile.cdrom_wait_ticks);
+#endif
   ThreadState* t = m_thread.get();
   const int request = retro_atomic_load_relaxed_int(&t->request_seq);
   const size_t tail = retro_atomic_load_relaxed_size(&t->tail);
@@ -234,6 +238,23 @@ bool CDROMAsyncReader::WaitForReadToComplete()
 
   return state && m_buffers[m_buffer_front].result;
 }
+
+#ifdef __XSDK__
+bool CDROMAsyncReader::IsReadPending()
+{
+  if (!IsUsingThread())
+    return false;
+
+  // WaitForReadToComplete's poll, once: pending until the request is acknowledged and then failed or a sector is in.
+  ThreadState* t = m_thread.get();
+  const int request = retro_atomic_load_relaxed_int(&t->request_seq);
+  if (retro_atomic_load_acquire_int(&t->ack_seq) != request)
+    return true;
+  if (retro_atomic_load_acquire_int(&t->error_seq) == request)
+    return false;
+  return retro_atomic_load_acquire_size(&t->head) == retro_atomic_load_relaxed_size(&t->tail);
+}
+#endif
 
 void CDROMAsyncReader::ReadSectorNonThreaded(CDImage::LBA lba)
 {

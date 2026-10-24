@@ -40,6 +40,10 @@ public:
   void QueueReadSector(CDImage::LBA lba);
 
   bool WaitForReadToComplete();
+#ifdef __XSDK__
+  // Whether the read thread is still fetching the sector WaitForReadToComplete would wait for.
+  bool IsReadPending();
+#endif
 
   /// Bypasses the sector cache and reads directly from the image.
   bool ReadSectorUncached(CDImage::LBA lba, CDImage::SubChannelQ* subq, SectorBuffer* data);

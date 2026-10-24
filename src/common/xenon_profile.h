@@ -27,6 +27,8 @@ typedef struct
   uint32_t gpu_space_ticks;
   // The SPU making its samples, which it does on demand as the CPU reaches its registers, outside the events mostly.
   uint32_t spu_ticks;
+  // The CPU thread waiting for the CD-ROM read thread's sector.
+  uint32_t cdrom_wait_ticks;
 } XenonProfile;
 
 extern XenonProfile xenon_profile;

@@ -1526,6 +1526,19 @@ void CDROM::UpdateCommandEvent()
 
 void CDROM::ExecuteDrive(TickCount ticks_late)
 {
+#ifdef __XSDK__
+  // The sector these states take not in yet, as a hard drive seeks: the drive goes on seeking a millisecond longer, as
+  // a real one may, rather than the whole console waiting (Spyro's loads stalled frames up to 37 ms).
+  const bool takes_sector = m_drive_state == DriveState::SeekingPhysical ||
+                            m_drive_state == DriveState::SeekingLogical ||
+                            m_drive_state == DriveState::SeekingImplicit || m_drive_state == DriveState::Reading ||
+                            m_drive_state == DriveState::Playing;
+  if (takes_sector && m_reader.IsReadPending())
+  {
+    m_drive_event->Schedule(System::g_ticks_per_second / 1000);
+    return;
+  }
+#endif
   switch (m_drive_state)
   {
     case DriveState::ShellOpening:
