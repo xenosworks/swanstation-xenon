@@ -163,6 +163,12 @@ bool IsAbsolutePath(const std::string_view& path)
 #ifdef _WIN32
   return (path.length() >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
           path[1] == ':' && (path[2] == '/' || path[2] == '\\'));
+#elif defined(__XSDK__)
+  // A drive's name and a colon before any separator, as in game:\games, or a device's path, as in \Device\Mass0
+  // (xsdk's src/path.c).
+  const std::string_view::size_type colon = path.find(':');
+  return (!path.empty() && path[0] == '\\') ||
+         (colon != std::string_view::npos && path.find_first_of("\\/") > colon);
 #else
   return (path.length() >= 1 && path[0] == '/');
 #endif
@@ -194,7 +200,8 @@ static std::string_view::size_type GetLastSeperatorPosition(const std::string_vi
   if (include_separator && last_separator != std::string_view::npos)
     last_separator++;
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__XSDK__)
+  // The console's paths separate with backslashes, as game:\games\Spyro.cue.
   std::string_view::size_type other_last_separator = filename.rfind('\\');
   if (other_last_separator != std::string_view::npos)
   {
