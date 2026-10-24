@@ -1,4 +1,5 @@
 #include "cpu_recompiler_code_generator.h"
+#include "common/little_endian.h"
 #include "common/log.h"
 #include "cpu_core.h"
 #include "cpu_core_private.h"
@@ -3020,14 +3021,14 @@ CodeGenerator::SpeculativeValue CodeGenerator::SpeculativeReadMemory(VirtualMemo
   if ((phys_addr & DCACHE_LOCATION_MASK) == DCACHE_LOCATION)
   {
     uint32_t scratchpad_offset = phys_addr & DCACHE_OFFSET_MASK;
-    std::memcpy(&value, &CPU::g_state.dcache[scratchpad_offset], sizeof(value));
+    value = LoadLE32(&CPU::g_state.dcache[scratchpad_offset]);
     return value;
   }
 
   if (Bus::IsRAMAddress(phys_addr))
   {
     uint32_t ram_offset = phys_addr & Bus::g_ram_mask;
-    std::memcpy(&value, &Bus::g_ram[ram_offset], sizeof(value));
+    value = LoadLE32(&Bus::g_ram[ram_offset]);
     return value;
   }
 
