@@ -92,17 +92,23 @@ add_library(common
 target_include_directories(common PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(common PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../dep/libretro-common/include")
-if(XSDK)
-  # The console has no OpenGL or Vulkan: the software renderer only.
+if(SOFTWARE_RENDERER_ONLY)
+  # No OpenGL or Vulkan: the software renderer only.
   get_target_property(common_sources common SOURCES)
   list(FILTER common_sources EXCLUDE REGEX "^(gl|vulkan)/")
-  # Only the recompiler and fastmem use these, and neither is built.
-  list(FILTER common_sources EXCLUDE REGEX "^(jit_code_buffer|page_fault_handler)[.]")
   set_property(TARGET common PROPERTY SOURCES ${common_sources})
-  target_sources(common PRIVATE xsdk_pthread.c)
   target_link_libraries(common PRIVATE stb Threads::Threads chdr-static miniz xxhash)
 else()
   target_link_libraries(common PRIVATE glad stb Threads::Threads chdr-static vulkan-loader miniz xxhash)
+endif()
+if(XSDK)
+  target_sources(common PRIVATE xsdk_pthread.c)
+endif()
+if(${CPU_ARCH} STREQUAL "powerpc")
+  # Only the recompiler and fastmem use these, and neither is built for PowerPC.
+  get_target_property(common_sources common SOURCES)
+  list(FILTER common_sources EXCLUDE REGEX "^(jit_code_buffer|page_fault_handler)[.]")
+  set_property(TARGET common PROPERTY SOURCES ${common_sources})
 endif()
 target_compile_definitions(common PRIVATE -D__LIBRETRO__)
 

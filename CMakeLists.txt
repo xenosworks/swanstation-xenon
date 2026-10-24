@@ -137,6 +137,12 @@ else()
   message(FATAL_ERROR "Unknown system processor: " ${CMAKE_SYSTEM_PROCESSOR})
 endif()
 
+# PowerPC builds have the software renderer only: the console has no OpenGL or Vulkan, and 32-bit PowerPC Linux has no
+# 64-bit atomics for Vulkan's handles (common/lockfree.h's AtomicSlot).
+if(${CPU_ARCH} STREQUAL "powerpc")
+  set(SOFTWARE_RENDERER_ONLY ON)
+endif()
+
 # Write binaries to a seperate directory.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 

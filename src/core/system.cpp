@@ -802,7 +802,7 @@ bool CreateGPU(GPURenderer renderer)
 {
   switch (renderer)
   {
-#ifndef __XSDK__
+#ifndef __PPC__
     case GPURenderer::HardwareOpenGL:
       g_gpu = GPU::CreateHardwareOpenGLRenderer();
       break;

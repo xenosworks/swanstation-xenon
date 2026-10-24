@@ -114,8 +114,8 @@ set(RECOMPILER_SRCS
 
 target_include_directories(core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-if(XSDK)
-  # The console has no OpenGL or Vulkan: the software renderer only, so no hardware renderer or its shader generator.
+if(SOFTWARE_RENDERER_ONLY)
+  # No OpenGL or Vulkan: the software renderer only, so no hardware renderer or its shader generator.
   get_target_property(core_sources core SOURCES)
   list(FILTER core_sources EXCLUDE REGEX "^(gpu_hw|shadergen)")
   set_property(TARGET core PROPERTY SOURCES ${core_sources})

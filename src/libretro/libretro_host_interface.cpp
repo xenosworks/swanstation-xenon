@@ -22,11 +22,11 @@
 #include "libretro_audio_stream.h"
 #include "libretro_game_settings.h"
 #include "libretro_host_display.h"
-#ifndef __XSDK__
+#ifndef __PPC__
 #include "core/gpu_hw_opengl.h"
 #endif
 #include "libretro_settings_interface.h"
-#ifndef __XSDK__
+#ifndef __PPC__
 #include "core/gpu_hw_vulkan.h"
 #endif
 #include "version.h"
@@ -2229,7 +2229,7 @@ bool HostInterface::RequestHardwareRendererContext()
 #endif
 #endif
 
-#ifndef __XSDK__
+#ifndef __PPC__
     case GPURenderer::HardwareVulkan:
       m_hw_render_callback_valid = LibretroVulkanHostDisplay::RequestHardwareRendererContext(&m_hw_render_callback);
       break;
@@ -2298,7 +2298,7 @@ void HostInterface::SwitchToHardwareRenderer()
 
     switch (renderer.value())
     {
-#ifndef __XSDK__
+#ifndef __PPC__
       case GPURenderer::HardwareOpenGL:
         display = std::make_unique<LibretroOpenGLHostDisplay>();
         break;

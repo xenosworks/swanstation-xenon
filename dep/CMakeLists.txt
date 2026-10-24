@@ -1,11 +1,11 @@
-# The console has no OpenGL or Vulkan: the software renderer only.
-if(NOT XSDK)
+# No OpenGL or Vulkan where there's the software renderer only.
+if(NOT SOFTWARE_RENDERER_ONLY)
   add_subdirectory(glad)
 endif()
 add_subdirectory(stb)
 add_subdirectory(libchdr EXCLUDE_FROM_ALL)
 add_subdirectory(xxhash)
-if(NOT XSDK)
+if(NOT SOFTWARE_RENDERER_ONLY)
   add_subdirectory(vulkan-loader)
 endif()
 if(XSDK)

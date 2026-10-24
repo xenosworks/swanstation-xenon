@@ -17,7 +17,7 @@ add_library(swanstation_libretro ${LIBRETRO_CORE_TYPE}
   libretro_settings_interface.h
 )
 
-if(XSDK)
+if(SOFTWARE_RENDERER_ONLY)
   target_link_libraries(swanstation_libretro PRIVATE core common libretro-common)
 else()
   target_link_libraries(swanstation_libretro PRIVATE core common glad vulkan-loader libretro-common)
