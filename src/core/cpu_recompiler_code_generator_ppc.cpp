@@ -76,6 +76,25 @@ struct PendingFlags
 
 static PendingFlags s_flags;
 
+// The word of CPU::g_state stored by the instruction just emitted: a load of it right after is answered from the register.
+// The console doesn't forward a store to a load (docs/HARDWARE.md, "Byte-reversed loads and stores cost what plain ones
+// do": a store then a load of the same word, 48 clocks a pair), and a block ends by adding its cycles to pending_ticks
+// and reading them back.
+struct LastFieldStore
+{
+  const CodeEmitter* emitter = nullptr;
+  size_t end_offset = 0;
+  uint32_t offset = 0;
+  HostReg reg = 0;
+};
+
+static LastFieldStore s_last_field_store;
+
+static void NoteFieldStore(const CodeEmitter* emitter, uint32_t offset, HostReg reg)
+{
+  s_last_field_store = {emitter, emitter->cursor_offset(), offset, reg};
+}
+
 static bool FitsSigned16(uint32_t value)
 {
   const int32_t signed_value = static_cast<int32_t>(value);
@@ -133,6 +152,7 @@ CodeGenerator::CodeGenerator(JitCodeBuffer* code_buffer)
     m_near_emitter(code_buffer->GetFreeCodePointer(), code_buffer->GetFreeCodeSpace()),
     m_far_emitter(code_buffer->GetFreeFarCodePointer(), code_buffer->GetFreeFarCodeSpace()), m_emit(&m_near_emitter)
 {
+  s_last_field_store = {};
   InitHostRegs();
 }
 
@@ -1186,8 +1206,19 @@ void CodeGenerator::EmitLoadCPUStructField(HostReg host_reg, RegSize guest_size,
       break;
 
     case RegSize_32:
-      m_emit->lwz(host_reg, static_cast<int32_t>(offset), RCPUPTR);
-      break;
+    {
+      const LastFieldStore& store = s_last_field_store;
+      if (store.emitter == m_emit && store.end_offset == m_emit->cursor_offset() && store.offset == offset)
+      {
+        if (store.reg != host_reg)
+          m_emit->mr(host_reg, store.reg);
+      }
+      else
+      {
+        m_emit->lwz(host_reg, static_cast<int32_t>(offset), RCPUPTR);
+      }
+    }
+    break;
 
     default:
       break;
@@ -1210,6 +1241,7 @@ void CodeGenerator::EmitStoreCPUStructField(uint32_t offset, const Value& value)
 
     case RegSize_32:
       m_emit->stw(reg, static_cast<int32_t>(offset), RCPUPTR);
+      NoteFieldStore(m_emit, offset, reg);
       break;
 
     default:
@@ -1252,6 +1284,7 @@ void CodeGenerator::EmitAddCPUStructField(uint32_t offset, const Value& value)
 
     default:
       m_emit->stw(RSCRATCH, static_cast<int32_t>(offset), RCPUPTR);
+      NoteFieldStore(m_emit, offset, RSCRATCH);
       break;
   }
 }
