@@ -29,6 +29,11 @@ typedef struct
   uint32_t spu_ticks;
   // The CPU thread waiting for the CD-ROM read thread's sector.
   uint32_t cdrom_wait_ticks;
+  // Decoding and compiling the blocks of guest code run for the first time, or again after a write to their memory.
+  uint32_t compile_ticks;
+  uint32_t compiled_blocks;
+  // Of those, generating the host code, decoding the rest.
+  uint32_t codegen_ticks;
   // The MDEC's macroblocks copied out, and its parts: unpacking the run-length coded coefficients, the IDCT, YUV to RGB
   // (or mono), and packing the pixels into its output FIFO.
   uint32_t mdec_macroblocks;

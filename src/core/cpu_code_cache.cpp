@@ -15,6 +15,9 @@ Log_SetChannel(CPU::CodeCache);
 #ifdef WITH_RECOMPILER
 #include "cpu_recompiler_code_generator.h"
 #endif
+#ifdef __XSDK__
+#include "common/xenon_profile.h"
+#endif
 
 namespace CPU::CodeCache {
 
@@ -588,6 +591,10 @@ static constexpr size_t MAX_BLOCK_INSTRUCTIONS = 1024;
 
 bool CompileBlock(CodeBlock* block, bool allow_flush)
 {
+#ifdef __XSDK__
+  XenonProfileScope profile(&xenon_profile.compile_ticks);
+  xenon_profile.compiled_blocks++;
+#endif
   uint32_t pc = block->GetPC();
   bool is_branch_delay_slot = false;
 
@@ -694,6 +701,9 @@ bool CompileBlock(CodeBlock* block, bool allow_flush)
     }
 
     s_code_buffer.WriteProtect(false);
+#ifdef __XSDK__
+    XenonProfileScope codegen_profile(&xenon_profile.codegen_ticks);
+#endif
     Recompiler::CodeGenerator codegen(&s_code_buffer);
     const bool compile_result = codegen.CompileBlock(block, &block->host_code, &block->host_code_size);
     s_code_buffer.WriteProtect(true);

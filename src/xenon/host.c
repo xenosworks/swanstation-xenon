@@ -706,15 +706,23 @@ typedef struct {
 	uint32_t events;
 	uint32_t event_ticks[XENON_PROFILE_EVENTS];
 	uint32_t gpu_sync;
+	uint32_t gpu_space;
 	uint32_t spu;
 	uint32_t cdrom_wait;
+	uint32_t compile;
+	uint32_t codegen;
+	uint32_t compiled_blocks;
 } Counts;
 
 static Counts counts_now(void)
 {
 	Counts counts = { .gpu_sync = xenon_profile.gpu_sync_ticks,
+		.gpu_space = xenon_profile.gpu_space_ticks,
 		.spu = xenon_profile.spu_ticks,
-		.cdrom_wait = xenon_profile.cdrom_wait_ticks };
+		.cdrom_wait = xenon_profile.cdrom_wait_ticks,
+		.compile = xenon_profile.compile_ticks,
+		.codegen = xenon_profile.codegen_ticks,
+		.compiled_blocks = xenon_profile.compiled_blocks };
 	for (uint32_t i = 0; i < xenon_profile.event_count; i++) {
 		counts.event_ticks[i] = xenon_profile.event_ticks[i];
 		counts.events += xenon_profile.event_ticks[i];
@@ -740,11 +748,14 @@ static void log_slow_frame(uint64_t took_us, const Counts *before)
 	}
 	xsdk_log_write(
 		"swanstation: frame %u took %.2f ms: waiting for the CD-ROM read thread %.2f, events %.2f (the longest %s, "
-		"%.2f; the GPU sync in them %.2f), the SPU %.2f",
+		"%.2f; the GPU sync in them %.2f), the SPU %.2f, waiting for room for GPU commands %.2f, compiling %u blocks "
+		"%.2f (generating code %.2f)",
 		(unsigned)frame_number, took_us / 1000.0, ticks_ms(before->cdrom_wait, after.cdrom_wait),
 		ticks_ms(before->events, after.events), xenon_profile.event_count ? xenon_profile.event_names[longest] : "none",
 		ticks_ms(before->event_ticks[longest], after.event_ticks[longest]), ticks_ms(before->gpu_sync, after.gpu_sync),
-		ticks_ms(before->spu, after.spu));
+		ticks_ms(before->spu, after.spu), ticks_ms(before->gpu_space, after.gpu_space),
+		(unsigned)(after.compiled_blocks - before->compiled_blocks), ticks_ms(before->compile, after.compile),
+		ticks_ms(before->codegen, after.codegen));
 }
 
 // Runs the core a frame at a time, each shown as the display's next, until frames=, the title is left, or the pause

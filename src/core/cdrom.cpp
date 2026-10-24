@@ -805,6 +805,13 @@ CDImage::LBA CDROM::GetNextSectorToBeRead()
   if (!IsReadingOrPlaying())
     return m_current_lba;
 
+#ifdef __XSDK__
+  // A sought sector not in yet is the one asked for, which ExecuteDrive waits for without holding the console up:
+  // waiting here, in ReadN's, ReadS's and Play's command event, held Digimon World's frames up to 112 ms as the hard
+  // drive sought. Only a failed seek gives otherwise.
+  if (m_reader.IsReadPending())
+    return m_requested_lba;
+#endif
   m_reader.WaitForReadToComplete();
   return m_reader.GetLastReadSector();
 }
@@ -866,6 +873,18 @@ void CDROM::AbortCommand()
 
 void CDROM::ExecuteCommand(TickCount ticks_late)
 {
+#ifdef __XSDK__
+  // Pause mid-seek completes the seek with the sought sector (CompleteSeek). Not in yet, as a hard drive seeks, the
+  // command waits a millisecond, as ExecuteDrive does, rather than the whole console: Digimon World pauses mid-seek,
+  // and its frames waited up to 112 ms.
+  if (m_command == Command::Pause &&
+      (m_drive_state == DriveState::SeekingLogical || m_drive_state == DriveState::SeekingPhysical) &&
+      m_reader.IsReadPending())
+  {
+    m_command_event->Schedule(System::g_ticks_per_second / 1000);
+    return;
+  }
+#endif
   const CommandInfo& ci = s_command_info[static_cast<uint8_t>(m_command)];
   if (m_param_fifo.GetSize() < ci.expected_parameters)
   {
