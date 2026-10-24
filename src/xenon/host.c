@@ -650,6 +650,20 @@ static void log_profile(uint64_t core_us)
 	xenon_profile.gpu_space_ticks = 0;
 	xenon_profile.spu_ticks = 0;
 	upload_ticks = 0;
+	// The MDEC's parts run inside its block copy-out event, and are in that event's time.
+	if (xenon_profile.mdec_macroblocks) {
+		xsdk_log_write(
+			"swanstation: the MDEC: %u macroblocks; ms a frame unpacking %.2f, the IDCT %.2f, YUV to RGB %.2f, "
+			"packing %.2f",
+			(unsigned)xenon_profile.mdec_macroblocks, frame_ms(xenon_profile.mdec_rle_ticks),
+			frame_ms(xenon_profile.mdec_idct_ticks), frame_ms(xenon_profile.mdec_yuv_ticks),
+			frame_ms(xenon_profile.mdec_pack_ticks));
+	}
+	xenon_profile.mdec_macroblocks = 0;
+	xenon_profile.mdec_rle_ticks = 0;
+	xenon_profile.mdec_idct_ticks = 0;
+	xenon_profile.mdec_yuv_ticks = 0;
+	xenon_profile.mdec_pack_ticks = 0;
 }
 
 // The counts a slow frame's log tells apart, as they stood before it.

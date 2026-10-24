@@ -29,6 +29,13 @@ typedef struct
   uint32_t spu_ticks;
   // The CPU thread waiting for the CD-ROM read thread's sector.
   uint32_t cdrom_wait_ticks;
+  // The MDEC's macroblocks copied out, and its parts: unpacking the run-length coded coefficients, the IDCT, YUV to RGB
+  // (or mono), and packing the pixels into its output FIFO.
+  uint32_t mdec_macroblocks;
+  uint32_t mdec_rle_ticks;
+  uint32_t mdec_idct_ticks;
+  uint32_t mdec_yuv_ticks;
+  uint32_t mdec_pack_ticks;
 } XenonProfile;
 
 extern XenonProfile xenon_profile;

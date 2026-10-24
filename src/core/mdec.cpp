@@ -8,6 +8,13 @@
 #include "system.h"
 
 #include <cstring>
+#ifdef __XSDK__
+#include "common/xenon_profile.h"
+// Times the rest of the scope into that count of the console's profile.
+#define MDEC_PROFILE(ticks) XenonProfileScope profile(&xenon_profile.ticks)
+#else
+#define MDEC_PROFILE(ticks)
+#endif
 MDEC g_mdec;
 
 MDEC::MDEC() = default;
@@ -451,6 +458,10 @@ void MDEC::ScheduleBlockCopyOut(TickCount ticks)
 void MDEC::CopyOutBlock()
 {
   m_block_copy_out_event->Deactivate();
+#ifdef __XSDK__
+  xenon_profile.mdec_macroblocks++;
+  const uint32_t pack_start = xenon_profile_now();
+#endif
 
   switch (m_status.data_output_depth)
   {
@@ -589,6 +600,10 @@ void MDEC::CopyOutBlock()
       break;
   }
 
+#ifdef __XSDK__
+  xenon_profile.mdec_pack_ticks += xenon_profile_now() - pack_start;
+#endif
+
   // if we've copied out all blocks, command is complete
   m_state = (m_remaining_halfwords == 0) ? State::Idle : State::DecodingMacroblock;
   Execute();
@@ -596,6 +611,7 @@ void MDEC::CopyOutBlock()
 
 bool MDEC::DecodeRLE_Old(int16_t* blk, const uint8_t* qt)
 {
+  MDEC_PROFILE(mdec_rle_ticks);
   // constexpr eliminates the C++11 thread-safe-static-init guard.
   // DecodeRLE_Old runs per macroblock during MDEC video decode (FMV
   // playback path).
@@ -672,8 +688,73 @@ bool MDEC::DecodeRLE_Old(int16_t* blk, const uint8_t* qt)
   return false;
 }
 
+#ifdef __XSDK__
 void MDEC::IDCT_Old(int16_t* blk)
 {
+  MDEC_PROFILE(mdec_idct_ticks);
+  // The sums below in doubles, which hold each of them exactly: from int16 coefficients and scale entries, eight terms
+  // a sum, the first pass's sums lie in [-2^33, 2^33] and the second's in [-2^51, 2^51), all integers, where a double
+  // holds every integer to 2^53. So the int64 sums come out as the #else branch's. Xenon pipelines its double
+  // multiply-adds and not its 64-bit integer multiplies, which took 6 ms a frame in Digimon World's opening movie.
+  // Integers go to doubles and back through memory, as Xenon has no move between its integer and FP registers, a
+  // whole block at a time, so no load waits on a store still queued.
+  constexpr uint64_t IN_BITS = UINT64_C(0x4330000000000000); // 2^52: an integer in its low mantissa bits
+  constexpr double IN_OFFSET = 4503599627370496.0 + 32768.0; // 2^52 + 2^15, for int16 values biased by 2^15
+  constexpr uint64_t OUT_BITS = UINT64_C(0x4338000000000000); // 2^52 + 2^51, which an integer in [-2^51, 2^51) is added to
+  constexpr double OUT_OFFSET = 6755399441055744.0;
+  union Doubles
+  {
+    uint64_t bits[64];
+    double values[64];
+  };
+
+  Doubles coefficients_in, scale_in;
+  for (uint32_t i = 0; i < 64; i++)
+  {
+    coefficients_in.bits[i] = IN_BITS | static_cast<uint16_t>(blk[i] + 32768);
+    scale_in.bits[i] = IN_BITS | static_cast<uint16_t>(m_scale_table[i] + 32768);
+  }
+  double coefficients[64], scale[64];
+  for (uint32_t i = 0; i < 64; i++)
+  {
+    coefficients[i] = coefficients_in.values[i] - IN_OFFSET;
+    scale[i] = scale_in.values[i] - IN_OFFSET;
+  }
+
+  double temp_buffer[64];
+  for (uint32_t x = 0; x < 8; x++)
+  {
+    for (uint32_t y = 0; y < 8; y++)
+    {
+      double sum = 0.0;
+      for (uint32_t u = 0; u < 8; u++)
+        sum += coefficients[u * 8 + x] * scale[u * 8 + y];
+      temp_buffer[x + y * 8] = sum;
+    }
+  }
+  Doubles sums;
+  for (uint32_t x = 0; x < 8; x++)
+  {
+    for (uint32_t y = 0; y < 8; y++)
+    {
+      double sum = 0.0;
+      for (uint32_t u = 0; u < 8; u++)
+        sum += temp_buffer[u + y * 8] * scale[u * 8 + x];
+      sums.values[x + y * 8] = sum + OUT_OFFSET;
+    }
+  }
+
+  for (uint32_t i = 0; i < 64; i++)
+  {
+    const int64_t sum = static_cast<int64_t>(sums.bits[i] - OUT_BITS);
+    blk[i] =
+      static_cast<int16_t>(std::clamp<int32_t>((static_cast<int32_t>(static_cast<uint32_t>((sum >> 32) + ((sum >> 31) & 1)) << 23) >> 23), -128, 127));
+  }
+}
+#else
+void MDEC::IDCT_Old(int16_t* blk)
+{
+  MDEC_PROFILE(mdec_idct_ticks);
   int64_t temp_buffer[64];
   for (uint32_t x = 0; x < 8; x++)
   {
@@ -698,10 +779,12 @@ void MDEC::IDCT_Old(int16_t* blk)
     }
   }
 }
+#endif
 
 void MDEC::YUVToRGB_Old(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>& Crblk, const std::array<int16_t, 64>& Cbblk,
                       const std::array<int16_t, 64>& Yblk)
 {
+  MDEC_PROFILE(mdec_yuv_ticks);
   // The PSX MDEC is fixed-point integer hardware - the console has no FPU. The
   // previous implementation evaluated the BT.601 YUV->RGB matrix in float
   // (1.402f * Cr, etc.). That is a determinism hazard: those products can be
@@ -751,6 +834,7 @@ void MDEC::YUVToRGB_Old(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>&
 
 bool MDEC::DecodeRLE_New(int16_t* blk, const uint8_t* qt)
 {
+  MDEC_PROFILE(mdec_rle_ticks);
   // Swapped to row-major so we can vectorize the IDCT.
   static constexpr uint8_t zigzag[64] ={0,  8,  1,  2,  9,  16, 24, 17, 10, 3,  4,  11, 18, 25, 32, 40,
                                    33, 26, 19, 12, 5,  6,  13, 20, 27, 34, 41, 48, 56, 49, 42, 35,
@@ -822,6 +906,7 @@ bool MDEC::DecodeRLE_New(int16_t* blk, const uint8_t* qt)
 
 void MDEC::IDCT_New(int16_t* blk)
 {
+  MDEC_PROFILE(mdec_idct_ticks);
   int32_t temp[64];
   for (uint32_t x = 0; x < 8; x++)
   {
@@ -850,6 +935,7 @@ void MDEC::IDCT_New(int16_t* blk)
 void MDEC::YUVToRGB_New(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>& Crblk, const std::array<int16_t, 64>& Cbblk,
                         const std::array<int16_t, 64>& Yblk)
 {
+  MDEC_PROFILE(mdec_yuv_ticks);
   const int32_t addval = m_status.data_output_signed ? 0 : 0x80;
   for (uint32_t y = 0; y < 8; y++)
   {
@@ -874,6 +960,7 @@ void MDEC::YUVToRGB_New(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>&
 
 void MDEC::YUVToMono(const std::array<int16_t, 64>& Yblk)
 {
+  MDEC_PROFILE(mdec_yuv_ticks);
   const int32_t addval = m_status.data_output_signed ? 0 : 0x80;
   for (uint32_t i = 0; i < 64; i++)
     m_block_rgb[i] = static_cast<uint32_t>(std::clamp((static_cast<int32_t>(static_cast<uint32_t>(Yblk[i]) << 23) >> 23), -128, 127) + addval);
