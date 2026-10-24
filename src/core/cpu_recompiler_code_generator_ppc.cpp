@@ -416,17 +416,18 @@ void CodeGenerator::EmitMul(HostReg to_reg_hi, HostReg to_reg_lo, const Value& l
   const HostReg lhs_reg = RegisterOrScratch(m_emit, lhs, RSCRATCH);
   const HostReg rhs_reg = RegisterOrScratch(m_emit, rhs, RSCRATCH2);
 
-  // the low half goes through a scratch when the high half's register is an operand
-  const bool hi_is_operand = (to_reg_hi == lhs_reg || to_reg_hi == rhs_reg);
-  const HostReg low = hi_is_operand ? RSCRATCH3 : to_reg_lo;
+  // the high half goes through a scratch when either result's register is an operand
+  const bool aliased =
+    (to_reg_hi == lhs_reg || to_reg_hi == rhs_reg || to_reg_lo == lhs_reg || to_reg_lo == rhs_reg);
+  const HostReg high = aliased ? RSCRATCH3 : to_reg_hi;
 
-  m_emit->mullw(low, lhs_reg, rhs_reg);
   if (signed_multiply)
-    m_emit->mulhw(to_reg_hi, lhs_reg, rhs_reg);
+    m_emit->mulhw(high, lhs_reg, rhs_reg);
   else
-    m_emit->mulhwu(to_reg_hi, lhs_reg, rhs_reg);
-  if (low != to_reg_lo)
-    m_emit->mr(to_reg_lo, low);
+    m_emit->mulhwu(high, lhs_reg, rhs_reg);
+  m_emit->mullw(to_reg_lo, lhs_reg, rhs_reg);
+  if (high != to_reg_hi)
+    m_emit->mr(to_reg_hi, high);
 }
 
 void CodeGenerator::EmitDiv(HostReg to_reg_quotient, HostReg to_reg_remainder, HostReg num, HostReg denom, RegSize size,
