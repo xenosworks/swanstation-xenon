@@ -11,6 +11,7 @@
 #ifdef __XSDK__
 #include "common/xenon_profile.h"
 #include "xsdk/thread.h"
+#include <cstring>
 #endif
 Log_SetChannel(GPUBackend);
 
@@ -136,6 +137,14 @@ GPUBackendDrawLineCommand* GPUBackend::NewDrawLineCommand(uint32_t num_vertices)
   return cmd;
 }
 
+#ifdef __XSDK__
+GPUBackendSnapshotDisplayCommand* GPUBackend::NewSnapshotDisplayCommand()
+{
+  return static_cast<GPUBackendSnapshotDisplayCommand*>(
+    AllocateCommand(GPUBackendCommandType::SnapshotDisplay, sizeof(GPUBackendSnapshotDisplayCommand)));
+}
+#endif
+
 void* GPUBackend::AllocateCommand(GPUBackendCommandType command, uint32_t size)
 {
   // Ensure size is a multiple of 4 so we don't end up with an unaligned command.
@@ -222,7 +231,13 @@ void GPUBackend::PushCommand(GPUBackendCommand* cmd)
   else
   {
     retro_spsc_write_end(&m_thread->ring, cmd->size);
+#ifdef __XSDK__
+    // A display snapshot is waited for a frame later however little else was queued: wake the thread for it.
+    if ((retro_atomic_load_relaxed_size(&m_thread->ring.head) - m_thread->notified_head) >= THRESHOLD_TO_WAKE_GPU ||
+        cmd->type == GPUBackendCommandType::SnapshotDisplay)
+#else
     if ((retro_atomic_load_relaxed_size(&m_thread->ring.head) - m_thread->notified_head) >= THRESHOLD_TO_WAKE_GPU)
+#endif
       WakeGPUThread();
   }
 }
@@ -436,6 +451,21 @@ void GPUBackend::HandleCommand(const GPUBackendCommand* cmd)
       DrawLine(static_cast<const GPUBackendDrawLineCommand*>(cmd));
     }
     break;
+
+#ifdef __XSDK__
+    case GPUBackendCommandType::SnapshotDisplay:
+    {
+      FlushRender();
+      const GPUBackendSnapshotDisplayCommand* ccmd = static_cast<const GPUBackendSnapshotDisplayCommand*>(cmd);
+      for (uint32_t i = 0; i < ccmd->row_count; i++)
+      {
+        const uint32_t row = (static_cast<uint32_t>(ccmd->first_row) + i) % VRAM_HEIGHT;
+        std::memcpy(&ccmd->snapshot[row * VRAM_WIDTH], &m_vram_ptr[row * VRAM_WIDTH], VRAM_WIDTH * sizeof(uint16_t));
+      }
+      retro_atomic_store_release_int(ccmd->done, ccmd->sequence);
+    }
+    break;
+#endif
 
     default:
       break;

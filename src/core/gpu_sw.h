@@ -50,4 +50,34 @@ protected:
   HostDisplayPixelFormat m_24bit_display_format = HostDisplayPixelFormat::RGBA8;
 
   GPU_SW_Backend m_backend;
+
+#ifdef __XSDK__
+  // What a vblank shows, as UpdateDisplay found it: VRAM's displayed rows, which the GPU thread copies in its order,
+  // and the CRTC's state then. UpdateDisplay converts the last vblank's while the GPU thread copies this one's.
+  struct DisplaySnapshot
+  {
+    HeapArray<uint16_t, VRAM_WIDTH * VRAM_HEIGHT> vram;
+    retro_atomic_int_t done;
+    // 0 until queued.
+    int sequence = 0;
+    bool disabled;
+    bool interlaced;
+    bool color_depth_24;
+    bool interleaved;
+    uint32_t field;
+    uint32_t regs_x;
+    uint32_t vram_left;
+    uint32_t vram_top;
+    uint32_t vram_width;
+    uint32_t vram_height;
+    uint32_t display_width;
+    uint32_t display_height;
+    uint32_t origin_left;
+    uint32_t origin_top;
+    float aspect_ratio;
+  };
+  std::array<DisplaySnapshot, 2> m_display_snapshots;
+  uint32_t m_display_snapshot_index = 0;
+  int m_display_snapshot_sequence = 0;
+#endif
 };

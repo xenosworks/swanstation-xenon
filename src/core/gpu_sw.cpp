@@ -7,6 +7,9 @@
 #include "system.h"
 #include <algorithm>
 #include <cstring>
+#ifdef __XSDK__
+#include <retro_miscellaneous.h>
+#endif
 #if defined(CPU_X64)
 #include <emmintrin.h>
 #elif defined(CPU_AARCH64)
@@ -29,6 +32,10 @@ ALWAYS_INLINE static constexpr std::tuple<T, T> MinMax(T v1, T v2)
 GPU_SW::GPU_SW()
 {
   m_vram_ptr = m_backend.GetVRAM();
+#ifdef __XSDK__
+  for (DisplaySnapshot& snapshot : m_display_snapshots)
+    retro_atomic_int_init(&snapshot.done, 0);
+#endif
 }
 
 GPU_SW::~GPU_SW()
@@ -595,6 +602,71 @@ void GPU_SW::ClearDisplay()
 
 void GPU_SW::UpdateDisplay()
 {
+#ifdef __XSDK__
+  // Queue this vblank's snapshot behind the drawing so far, then show the last vblank's, which the GPU thread has
+  // almost always copied by now. Shown a frame later than upstream shows it, the CPU thread no longer waits at every
+  // vblank for the drawing to finish: up to 10 ms in Spyro's busy scenes.
+  DisplaySnapshot& queued = m_display_snapshots[m_display_snapshot_index];
+  queued.disabled = IsDisplayDisabled();
+  queued.interlaced = IsInterlacedDisplayEnabled();
+  queued.color_depth_24 = m_GPUSTAT.display_area_color_depth_24;
+  queued.interleaved = m_GPUSTAT.vertical_resolution;
+  queued.field = GetInterlacedDisplayField();
+  queued.regs_x = m_crtc_state.regs.X;
+  queued.vram_left = m_crtc_state.display_vram_left;
+  queued.vram_top = m_crtc_state.display_vram_top;
+  queued.vram_width = m_crtc_state.display_vram_width;
+  queued.vram_height = m_crtc_state.display_vram_height;
+  queued.display_width = m_crtc_state.display_width;
+  queued.display_height = m_crtc_state.display_height;
+  queued.origin_left = m_crtc_state.display_origin_left;
+  queued.origin_top = m_crtc_state.display_origin_top;
+  queued.aspect_ratio = GetDisplayAspectRatio();
+  queued.sequence = ++m_display_snapshot_sequence;
+  if (!queued.disabled)
+  {
+    GPUBackendSnapshotDisplayCommand* cmd = m_backend.NewSnapshotDisplayCommand();
+    cmd->snapshot = queued.vram.data();
+    cmd->first_row = static_cast<uint16_t>(queued.vram_top % VRAM_HEIGHT);
+    // An interlaced display's odd field starts a row down.
+    cmd->row_count = static_cast<uint16_t>(std::min(queued.vram_height + 1, VRAM_HEIGHT));
+    cmd->done = &queued.done;
+    cmd->sequence = queued.sequence;
+    m_backend.PushCommand(cmd);
+  }
+  m_display_snapshot_index ^= 1;
+
+  const DisplaySnapshot& shown = m_display_snapshots[m_display_snapshot_index];
+  if (shown.sequence == 0)
+    return;
+  m_host_display->SetDisplayParameters(shown.display_width, shown.display_height, shown.origin_left, shown.origin_top,
+                                       shown.vram_width, shown.vram_height, shown.aspect_ratio);
+  if (shown.disabled)
+  {
+    m_host_display->ClearDisplayTexture();
+    return;
+  }
+  // The GPU thread a whole frame behind: wait for that snapshot alone, not for this frame's drawing behind it too.
+  while (retro_atomic_load_acquire_int(&m_display_snapshots[m_display_snapshot_index].done) != shown.sequence)
+    retro_cpu_relax();
+
+  // The copy-outs read VRAM through m_vram_ptr; for them, it's the snapshot.
+  uint16_t* const vram = m_vram_ptr;
+  m_vram_ptr = const_cast<uint16_t*>(shown.vram.data());
+  const uint32_t field = shown.interlaced ? shown.field : 0;
+  const bool interleaved = shown.interlaced && shown.interleaved;
+  if (shown.color_depth_24)
+  {
+    CopyOut24Bit(m_24bit_display_format, shown.regs_x, shown.vram_top + field, shown.vram_left - shown.regs_x,
+                 shown.vram_width, shown.vram_height, field, shown.interlaced, interleaved);
+  }
+  else
+  {
+    CopyOut15Bit(m_16bit_display_format, shown.vram_left, shown.vram_top + field, shown.vram_width,
+                 shown.vram_height, field, shown.interlaced, interleaved);
+  }
+  m_vram_ptr = vram;
+#else
   // fill display texture
   m_backend.Sync(true);
 
@@ -644,6 +716,7 @@ void GPU_SW::UpdateDisplay()
       }
     }
   }
+#endif
 }
 
 void GPU_SW::FillBackendCommandParameters(GPUBackendCommand* cmd) const

@@ -3,6 +3,9 @@
 #include "common/rectangle.h"
 #include "types.h"
 #include <array>
+#ifdef __XSDK__
+#include <retro_atomic.h>
+#endif
 
 inline constexpr uint32_t VRAM_WIDTH = 1024, VRAM_HEIGHT = 512, VRAM_SIZE = VRAM_WIDTH * VRAM_HEIGHT * sizeof(uint16_t),
                      VRAM_WIDTH_MASK = VRAM_WIDTH - 1, VRAM_HEIGHT_MASK = VRAM_HEIGHT - 1, TEXTURE_PAGE_WIDTH = 256,
@@ -224,7 +227,10 @@ enum class GPUBackendCommandType : uint8_t
   SetDrawingArea,
   DrawPolygon,
   DrawRectangle,
-  DrawLine
+  DrawLine,
+#ifdef __XSDK__
+  SnapshotDisplay,
+#endif
 };
 
 union GPUBackendCommandParameters
@@ -265,6 +271,22 @@ struct GPUBackendSyncCommand : public GPUBackendCommand
 {
   bool allow_sleep;
 };
+
+#ifdef __XSDK__
+// Copies the rows a vblank shows out of VRAM, in the GPU thread's order behind the drawing before it, for
+// GPU_SW::UpdateDisplay to convert a frame later, so the CPU thread doesn't wait for the drawing at every vblank.
+struct GPUBackendSnapshotDisplayCommand : public GPUBackendCommand
+{
+  // VRAM-shaped, each row copied to its own place.
+  uint16_t* snapshot;
+  uint16_t first_row;
+  // Past VRAM's last row, the rows go on from its first.
+  uint16_t row_count;
+  // Set to sequence once the rows are copied.
+  retro_atomic_int_t* done;
+  int sequence;
+};
+#endif
 
 struct GPUBackendFillVRAMCommand : public GPUBackendCommand
 {

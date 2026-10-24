@@ -22,6 +22,9 @@ public:
   GPUBackendDrawPolygonCommand* NewDrawPolygonCommand(uint32_t num_vertices);
   GPUBackendDrawRectangleCommand* NewDrawRectangleCommand();
   GPUBackendDrawLineCommand* NewDrawLineCommand(uint32_t num_vertices);
+#ifdef __XSDK__
+  GPUBackendSnapshotDisplayCommand* NewSnapshotDisplayCommand();
+#endif
 
   void PushCommand(GPUBackendCommand* cmd);
   void Sync(bool allow_sleep);
