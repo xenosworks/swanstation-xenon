@@ -845,7 +845,10 @@ Value CodeGenerator::XorValues(const Value& lhs, const Value& rhs)
   }
 
   Value res = m_register_cache.AllocateScratch(lhs.size);
+#ifndef CPU_POWERPC
+  // every path below copies what it needs; the other backends keep this copy
   EmitCopyValue(res.host_reg, lhs);
+#endif
   if (lhs.HasConstantValue(0))
   {
     EmitCopyValue(res.host_reg, rhs);
