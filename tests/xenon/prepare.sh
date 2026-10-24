@@ -1,9 +1,9 @@
 #!/bin/sh
-# Prepares the console runs of tests/run_tests.sh's golden suites, mdec and polyline, for swanstation_test.xex.
+# Prepares the console runs of tests/run_tests.sh's golden suites, mdec, polyline and gte, for swanstation_test.xex.
 #
 # usage: tests/xenon/prepare.sh out_dir
 #
-# Writes out_dir/mdec and out_dir/polyline. Each holds bios.bin, the suite's test ROM as run_golden builds it (the same
+# Writes out_dir/mdec, out_dir/polyline and out_dir/gte. Each holds bios.bin, the suite's test ROM as run_golden builds it (the same
 # clang flags, mkrom.py with seed 1 and mode 0), and frontend.txt, the frontend's command line and environment as
 # swanstation_test reads them: the same frame counts and RAMDUMP range, the interpreter, fastmem off. Copy both beside
 # swanstation_test.xex on the console, run it, and check swanstation_test.log with tests/xenon/check.sh.
@@ -60,3 +60,4 @@ EOF
 
 prepare_suite mdec mdec_decode 1500 160
 prepare_suite polyline gpu_polyline 600 80
+prepare_suite gte gte_ops 200 160

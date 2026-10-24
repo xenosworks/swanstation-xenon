@@ -1,14 +1,14 @@
 #!/bin/sh
 # Checks a console run of a golden suite, as run_golden in tests/run_tests.sh does.
 #
-# usage: tests/xenon/check.sh mdec|polyline swanstation_test.log
+# usage: tests/xenon/check.sh mdec|polyline|gte swanstation_test.log
 #
 # swanstation_test.log is the log beside the .xex after a run of the folder tests/xenon/prepare.sh wrote for the suite.
 # It must say the frontend returned 0, and its RAMDUMP words must match the suite's .expected file.
 set -eu
 
-SUITE=${1:?usage: check.sh mdec|polyline swanstation_test.log}
-LOG=${2:?usage: check.sh mdec|polyline swanstation_test.log}
+SUITE=${1:?usage: check.sh mdec|polyline|gte swanstation_test.log}
+LOG=${2:?usage: check.sh mdec|polyline|gte swanstation_test.log}
 TESTS=$(cd "$(dirname "$0")/.." && pwd)
 
 # The suite's expected file, then run_golden's case count and pairs.
@@ -18,6 +18,9 @@ case "$SUITE" in
     ;;
   polyline)
     set -- gpu_polyline 4
+    ;;
+  gte)
+    set -- gte_ops 24
     ;;
   *)
     echo "unknown suite $SUITE"
