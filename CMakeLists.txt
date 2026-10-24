@@ -175,6 +175,10 @@ endif()
 # configure with -DMSB_FIRST=ON and the code's `#ifdef MSB_FIRST`
 # branches will activate.
 option(MSB_FIRST "Build for a big-endian host (opt-in; no targets currently use this)." OFF)
+if(XSDK)
+  # The Xbox 360 is big-endian: a configure without this built a core that misread the disc and found no BIOS.
+  set(MSB_FIRST ON CACHE BOOL "Build for a big-endian host" FORCE)
+endif()
 if(MSB_FIRST)
   add_definitions("-DMSB_FIRST=1")
 endif()
