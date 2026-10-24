@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prepares the console runs of tests/run_tests.sh's golden suites, mdec, polyline and gte, for swanstation_test.xex.
+# Prepares the console runs of tests/run_tests.sh's golden suites, mdec, polyline and gte, and of its cpu suite, for
+# swanstation_test.xex.
 #
 # usage: tests/xenon/prepare.sh out_dir
 #
@@ -7,6 +8,9 @@
 # clang flags, mkrom.py with seed 1 and mode 0), and frontend.txt, the frontend's command line and environment as
 # swanstation_test reads them: the same frame counts and RAMDUMP range, the interpreter, fastmem off. Copy both beside
 # swanstation_test.xex on the console, run it, and check swanstation_test.log with tests/xenon/check.sh.
+#
+# It also writes out_dir/cpu1 to out_dir/cpu6, the runs of the cpu suite, one per seed, on the recompiler with memory
+# exceptions on, which check.sh compares with tests/cpu_fuzz.expected.
 #
 # Needs clang, ld.lld and llvm-objcopy for the MIPS test ROMs, and python3.
 set -eu
@@ -61,3 +65,30 @@ EOF
 prepare_suite mdec mdec_decode 1500 160
 prepare_suite polyline gpu_polyline 600 80
 prepare_suite gte gte_ops 200 160
+
+# prepare_cpu seed mode: one run of the cpu suite, as run_tests.sh gives it (its seeds and modes are the same).
+prepare_cpu()
+{
+  seed=$1
+  build_rom cpu_fuzz
+  dir="$OUT/cpu$seed"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  python3 "$TESTS/guest/mkrom.py" "$WORK/cpu_fuzz.rom" "$dir/bios.bin" "$seed" "$2" 150
+  cat > "$dir/frontend.txt" <<EOF
+swanstation 200
+FE_DIR=game:
+FE_CPU=Recompiler
+FE_FASTMEM=Disabled
+RAMDUMP=0x160000:150
+swanstation_CPU_RecompilerMemoryExceptions=true
+EOF
+  echo "cpu$seed: $dir"
+}
+
+prepare_cpu 1 0x80000FFF
+prepare_cpu 2 0x80000FFF
+prepare_cpu 3 0x80000FFF
+prepare_cpu 4 0x80000FFF
+prepare_cpu 5 0x1FF
+prepare_cpu 6 0x1FF
