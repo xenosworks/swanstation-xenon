@@ -5,6 +5,7 @@
  * Boots the core with the software renderer, flips the GPU thread and
  * CD readahead options while running, then optionally:
  *   RAMDUMP=offset:count  print count RAM words starting at offset
+ *   OUTPUTSUM=1           print a checksum of the last video frame's pixel values and one of all the audio samples
  *   STATEFUZZ=iters       corrupt and load save states, iters times
  *   SEED=n                seed for STATEFUZZ
  *   STATEFUZZ_SECTION=s   only corrupt the state section with marker s
@@ -109,6 +110,11 @@ static int options_dirty = 0;
 static struct retro_disk_control_ext_callback disk_cb;
 static int have_disk_cb = 0;
 
+/* For OUTPUTSUM: the pixels are native 16-bit values, or native 32-bit ones for XRGB8888 (1). */
+static unsigned pixel_format = 2;
+static uint32_t video_sum, audio_sum;
+static unsigned long audio_samples;
+
 /* 0: log_cb, 1: log_cb_second, 2: a NULL logger */
 static int logger_phase = 0;
 static unsigned stale_log_calls = 0;
@@ -153,6 +159,8 @@ static bool env_cb(unsigned cmd, void* data)
       *(const char**)data = getenv("FE_DIR");
       return true;
     case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
+      pixel_format = *(const unsigned*)data;
+      return true;
     case RETRO_ENVIRONMENT_SET_VARIABLES:
     case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
       return true;
@@ -199,19 +207,40 @@ static bool env_cb(unsigned cmd, void* data)
 
 static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch)
 {
-  (void)data;
-  (void)w;
-  (void)h;
-  (void)pitch;
+  unsigned x, y;
+  if (!data || !getenv("OUTPUTSUM"))
+    return;
+  video_sum = 0;
+  for (y = 0; y < h; y++)
+  {
+    const unsigned char* row = (const unsigned char*)data + y * pitch;
+    for (x = 0; x < w; x++)
+    {
+      if (pixel_format == 1)
+      {
+        uint32_t v;
+        memcpy(&v, row + x * 4, 4);
+        video_sum = video_sum * 31u + v;
+      }
+      else
+      {
+        uint16_t v;
+        memcpy(&v, row + x * 2, 2);
+        video_sum = video_sum * 31u + v;
+      }
+    }
+  }
 }
 static void audio_cb(int16_t l, int16_t r)
 {
-  (void)l;
-  (void)r;
+  audio_sum = (audio_sum * 31u + (uint16_t)l) * 31u + (uint16_t)r;
+  audio_samples++;
 }
 static size_t audio_batch_cb(const int16_t* d, size_t f)
 {
-  (void)d;
+  size_t i;
+  for (i = 0; i < f; i++)
+    audio_cb(d[i * 2], d[i * 2 + 1]);
   return f;
 }
 /* Port 1 holds L1 + R1 + L3 + R3, the analog combo the core uses with no option set, while this is set. */
@@ -905,6 +934,12 @@ int main(int argc, char** argv)
       const uint32_t w = load_le32(ram + offset + k * 4);
       printf("%08lx %08x\n", offset + k * 4, (unsigned)w);
     }
+  }
+
+  if (getenv("OUTPUTSUM"))
+  {
+    printf("video: last frame %08x\n", (unsigned)video_sum);
+    printf("audio: %08x (%lu samples)\n", (unsigned)audio_sum, audio_samples);
   }
 
   if (getenv("DISKTEST"))

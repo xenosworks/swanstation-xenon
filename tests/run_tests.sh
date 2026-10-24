@@ -6,6 +6,9 @@
 #   polyline                          long GPU poly-lines, compared with tests/gpu_polyline.expected
 #   gte                               every GTE command on pseudo-random registers, compared with
 #                                     tests/gte_ops.expected
+#   display                           pseudo-random VRAM shown in 15-bit and 24-bit colour, progressive
+#                                     and interlaced; the checksum of each last frame is compared with
+#                                     tests/display_modes.expected
 #   regfuzz [first] [last] [frames]   register fuzzer, one run per seed (default 1 20 120)
 #   statefuzz [first] [last] [iters]  corrupted save states loaded into a fuzzed system (default 1 3 150)
 #   mdecstate                         MDEC states with table commands short of parameters, unknown
@@ -123,6 +126,28 @@ case "$SUITE" in
 
   gte)
     run_golden gte_ops 200 160 24
+    ;;
+
+  display)
+    build_rom display_modes
+    : > "$WORK/display.out"
+    for mode in 0 1 2 3; do
+      if ! OUTPUTSUM=1 run_rom display_modes 1 "$mode" 40; then
+        echo "display: mode $mode failed"
+        exit 1
+      fi
+      grep "^video:" "$WORK/run.log" >> "$WORK/display.out" || true
+    done
+    if [ "${UPDATE_EXPECTED:-}" = 1 ]; then
+      cp "$WORK/display.out" "$TESTS/display_modes.expected"
+      echo "display: wrote tests/display_modes.expected"
+      exit 0
+    fi
+    if ! tr -d '\r' < "$TESTS/display_modes.expected" | diff - "$WORK/display.out"; then
+      echo "display: the output differs from tests/display_modes.expected"
+      exit 1
+    fi
+    echo "display: the output matches"
     ;;
 
   regfuzz)
