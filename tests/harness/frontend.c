@@ -391,14 +391,7 @@ static int state_fuzz(void* h, unsigned iters, uint32_t seed)
     free(buf);
     return 1;
   }
-  if (!unserialize(orig, size))
-  {
-    fprintf(stderr, "loading a state just saved failed\n");
-    free(orig);
-    free(buf);
-    return 1;
-  }
-
+  /* before the reload, which the recompiler's states sometimes fail */
   if (getenv("STATEFUZZ_DUMP"))
   {
     FILE* f = fopen(getenv("STATEFUZZ_DUMP"), "wb");
@@ -407,6 +400,14 @@ static int state_fuzz(void* h, unsigned iters, uint32_t seed)
       fwrite(orig, 1, size, f);
       fclose(f);
     }
+  }
+
+  if (!unserialize(orig, size))
+  {
+    fprintf(stderr, "loading a state just saved failed\n");
+    free(orig);
+    free(buf);
+    return 1;
   }
 
   rng_state = seed;
