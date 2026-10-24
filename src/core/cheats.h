@@ -79,8 +79,13 @@ struct CheatCode
 
     struct
     {
+#ifdef MSB_FIRST
+      uint32_t first;
+      uint32_t second;
+#else
       uint32_t second;
       uint32_t first;
+#endif
     };
 
     BitField<uint64_t, InstructionCode, 32 + 24, 8> code;
