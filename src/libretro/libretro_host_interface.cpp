@@ -58,6 +58,18 @@ struct DiskStateHeader
   uint32_t path_length;
 };
 
+#ifdef MSB_FIRST
+// A state's numbers are little-endian on every host; this converts the header's either way.
+void SwapDiskStateHeaderLE(DiskStateHeader* header)
+{
+  header->magic = SwapLE64(header->magic);
+  header->version = SwapLE32(header->version);
+  header->flags = SwapLE32(header->flags);
+  header->index = SwapLE32(header->index);
+  header->path_length = SwapLE32(header->path_length);
+}
+#endif
+
 std::optional<uint32_t> FindDiskImage(const HostInterface::DiskControlInfo& info, const std::string& path,
                                       uint32_t preferred_index)
 {
@@ -1012,7 +1024,13 @@ bool HostInterface::retro_serialize(void* data, size_t size)
                                (System::IsMediaTrayOpen() ? DISK_STATE_EJECTED : 0u) | (no_disc ? DISK_STATE_NO_DISC : 0u) |
                                  (info.has_sub_images ? DISK_STATE_CONTAINER : 0u),
                                info.image_index, static_cast<uint32_t>(path.size())};
+#ifdef MSB_FIRST
+  DiskStateHeader written = header;
+  SwapDiskStateHeaderLE(&written);
+  return stream->Write2(&written, sizeof(written)) && stream->Write2(path.data(), header.path_length);
+#else
   return stream->Write2(&header, sizeof(header)) && stream->Write2(path.data(), header.path_length);
+#endif
 }
 
 bool HostInterface::retro_unserialize(const void* data, size_t size)
@@ -1022,6 +1040,9 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
 
   SAVE_STATE_HEADER state_header;
   std::memcpy(&state_header, data, sizeof(state_header));
+#ifdef MSB_FIRST
+  SwapSaveStateHeaderLE(&state_header);
+#endif
   if (state_header.magic != SAVE_STATE_MAGIC || state_header.data_compression_type != 0)
     return false;
 
@@ -1037,6 +1058,7 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
   uint64_t trailer_magic = 0;
   if (size - data_end >= sizeof(trailer_magic))
     std::memcpy(&trailer_magic, static_cast<const uint8_t*>(data) + data_end, sizeof(trailer_magic));
+  trailer_magic = SwapLE64(trailer_magic);
 
   // Older cores stop at the machine payload and ignore this optional trailer.
   if (trailer_magic == DISK_STATE_MAGIC)
@@ -1045,6 +1067,9 @@ bool HostInterface::retro_unserialize(const void* data, size_t size)
       return false;
     DiskStateHeader header;
     std::memcpy(&header, static_cast<const uint8_t*>(data) + data_end, sizeof(header));
+#ifdef MSB_FIRST
+    SwapDiskStateHeaderLE(&header);
+#endif
     if (header.version != DISK_STATE_VERSION || (header.flags & ~7u) != 0 ||
         header.path_length > size - data_end - sizeof(header))
       return false;

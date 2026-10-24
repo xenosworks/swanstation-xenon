@@ -2,6 +2,7 @@
 #include "byte_stream.h"
 #include "fifo_queue.h"
 #include "heap_array.h"
+#include "little_endian.h"
 #include "types.h"
 #include <array>
 #include <cstring>
@@ -31,7 +32,37 @@ public:
   void SetMode(Mode mode) { m_mode = mode; }
   uint32_t GetVersion() const { return m_version; }
 
-  /// Overload for integral or floating-point types. Writes bytes as-is.
+#ifdef MSB_FIRST
+  /// A state holds its numbers little-endian on every host, so one saved here loads on a little-endian host too.
+  template<typename T>
+  static T SwapLE(T value)
+  {
+    if constexpr (sizeof(T) == 2)
+    {
+      uint16_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      bits = SwapLE16(bits);
+      std::memcpy(&value, &bits, sizeof(bits));
+    }
+    else if constexpr (sizeof(T) == 4)
+    {
+      uint32_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      bits = SwapLE32(bits);
+      std::memcpy(&value, &bits, sizeof(bits));
+    }
+    else if constexpr (sizeof(T) == 8)
+    {
+      uint64_t bits;
+      std::memcpy(&bits, &value, sizeof(bits));
+      bits = SwapLE64(bits);
+      std::memcpy(&value, &bits, sizeof(bits));
+    }
+    return value;
+  }
+#endif
+
+  /// Overload for integral or floating-point types. Writes bytes as-is, little-endian.
   template<typename T, std::enable_if_t<std::is_integral_v<T> || std::is_floating_point_v<T>, int> = 0>
   void Do(T* value_ptr)
   {
@@ -39,11 +70,21 @@ public:
     {
       if (m_error || (m_error |= !m_stream->Read2(value_ptr, sizeof(T))) == true)
         *value_ptr = static_cast<T>(0);
+#ifdef MSB_FIRST
+      else
+        *value_ptr = SwapLE(*value_ptr);
+#endif
     }
     else
     {
+#ifdef MSB_FIRST
+      const T temp = SwapLE(*value_ptr);
+      if (!m_error)
+        m_error |= !m_stream->Write2(&temp, sizeof(T));
+#else
       if (!m_error)
         m_error |= !m_stream->Write2(value_ptr, sizeof(T));
+#endif
     }
   }
 
@@ -57,6 +98,10 @@ public:
       TType temp;
       if (m_error || (m_error |= !m_stream->Read2(&temp, sizeof(TType))) == true)
         temp = static_cast<TType>(0);
+#ifdef MSB_FIRST
+      else
+        temp = SwapLE(temp);
+#endif
 
       *value_ptr = static_cast<T>(temp);
     }
@@ -64,12 +109,15 @@ public:
     {
       TType temp;
       std::memcpy(&temp, value_ptr, sizeof(TType));
+#ifdef MSB_FIRST
+      temp = SwapLE(temp);
+#endif
       if (!m_error)
         m_error |= !m_stream->Write2(&temp, sizeof(TType));
     }
   }
 
-  /// Overload for POD types, such as structs.
+  /// Overload for POD types, such as structs. Bytes as-is: only for structs of bytes.
   template<typename T, std::enable_if_t<std::is_pod_v<T>, int> = 0>
   void DoPOD(T* value_ptr)
   {

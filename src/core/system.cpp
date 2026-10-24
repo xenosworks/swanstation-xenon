@@ -994,6 +994,9 @@ bool DoLoadState(ByteStream* state, bool force_software_renderer, bool update_di
   SAVE_STATE_HEADER header;
   if (!state->Read2(&header, sizeof(header)))
     return false;
+#ifdef MSB_FIRST
+  SwapSaveStateHeaderLE(&header);
+#endif
 
   if (header.magic != SAVE_STATE_MAGIC)
     return false;
@@ -1175,6 +1178,9 @@ bool SaveState(ByteStream* state)
   }
 
   // re-write header
+#ifdef MSB_FIRST
+  SwapSaveStateHeaderLE(&header);
+#endif
   const uint64_t end_position = state->GetPosition();
   if (!state->SeekAbsolute(header_position) || !state->Write2(&header, sizeof(header)) ||
       !state->SeekAbsolute(end_position))

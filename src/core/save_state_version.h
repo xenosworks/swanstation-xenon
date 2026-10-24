@@ -1,4 +1,5 @@
 #pragma once
+#include "common/little_endian.h"
 #include "types.h"
 
 static constexpr uint32_t SAVE_STATE_MAGIC = 0x43435544;
@@ -31,3 +32,26 @@ struct SAVE_STATE_HEADER
   uint32_t offset_to_data;
 };
 #pragma pack(pop)
+
+#ifdef MSB_FIRST
+// A state's numbers are little-endian on every host; this converts the header's either way.
+inline void SwapSaveStateHeaderLE(SAVE_STATE_HEADER* header)
+{
+  uint32_t* const numbers[] = {&header->magic,
+                               &header->version,
+                               &header->media_filename_length,
+                               &header->offset_to_media_filename,
+                               &header->media_subimage_index,
+                               &header->unused_offset_to_playlist_filename,
+                               &header->screenshot_width,
+                               &header->screenshot_height,
+                               &header->screenshot_size,
+                               &header->offset_to_screenshot,
+                               &header->data_compression_type,
+                               &header->data_compressed_size,
+                               &header->data_uncompressed_size,
+                               &header->offset_to_data};
+  for (uint32_t* number : numbers)
+    *number = SwapLE32(*number);
+}
+#endif

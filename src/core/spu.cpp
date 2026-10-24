@@ -113,6 +113,28 @@ void SPU::Reset()
 
 bool SPU::DoState(StateWrapper& sw)
 {
+#ifdef MSB_FIRST
+  // The bytes a little-endian host's DoPOD writes: 8 for an envelope, 12 for a sweep, a pad byte in each.
+  const auto do_envelope = [&sw](VolumeEnvelope* envelope) {
+    uint8_t pad = 0;
+    sw.Do(&envelope->counter);
+    sw.Do(&envelope->rate);
+    sw.Do(&envelope->decreasing);
+    sw.Do(&envelope->exponential);
+    sw.Do(&pad);
+  };
+  const auto do_sweep = [&sw, &do_envelope](VolumeSweep* sweep) {
+    uint8_t pad = 0;
+    do_envelope(&sweep->envelope);
+    sw.Do(&sweep->envelope_active);
+    sw.Do(&pad);
+    sw.Do(&sweep->current_level);
+  };
+#else
+  const auto do_envelope = [&sw](VolumeEnvelope* envelope) { sw.DoPOD(envelope); };
+  const auto do_sweep = [&sw](VolumeSweep* sweep) { sw.DoPOD(sweep); };
+#endif
+
   sw.Do(&m_ticks_carry);
   sw.Do(&m_SPUCNT.bits);
   sw.Do(&m_SPUSTAT.bits);
@@ -123,8 +145,8 @@ bool SPU::DoState(StateWrapper& sw)
   sw.Do(&m_capture_buffer_position);
   sw.Do(&m_main_volume_left_reg.bits);
   sw.Do(&m_main_volume_right_reg.bits);
-  sw.DoPOD(&m_main_volume_left);
-  sw.DoPOD(&m_main_volume_right);
+  do_sweep(&m_main_volume_left);
+  do_sweep(&m_main_volume_right);
   sw.Do(&m_cd_audio_volume_left);
   sw.Do(&m_cd_audio_volume_right);
   sw.Do(&m_external_volume_left);
@@ -160,9 +182,9 @@ bool SPU::DoState(StateWrapper& sw)
     sw.DoArray(&v.current_block_samples[0], NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK);
     sw.Do(&v.adpcm_last_samples);
     sw.Do(&v.last_volume);
-    sw.DoPOD(&v.left_volume);
-    sw.DoPOD(&v.right_volume);
-    sw.DoPOD(&v.adsr_envelope);
+    do_sweep(&v.left_volume);
+    do_sweep(&v.right_volume);
+    do_envelope(&v.adsr_envelope);
     sw.Do(&v.adsr_phase);
     sw.Do(&v.adsr_target);
     sw.Do(&v.has_samples);
