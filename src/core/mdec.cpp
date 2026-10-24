@@ -10,6 +10,7 @@
 #include <cstring>
 #ifdef __XSDK__
 #include "common/xenon_profile.h"
+#include <altivec.h>
 // Times the rest of the scope into that count of the console's profile.
 #define MDEC_PROFILE(ticks) XenonProfileScope profile(&xenon_profile.ticks)
 #else
@@ -819,38 +820,47 @@ void MDEC::YUVToRGB_Old(uint32_t xx, uint32_t yy, const std::array<int16_t, 64>&
 
   const int16_t addval = m_status.data_output_signed ? 0 : 0x80;
 #ifdef __XSDK__
-  // Each chroma sample's terms once, for the four pixels that share it, and clamps that don't branch, with the #else
-  // branch's results: Xenon pays for the multiplies and for mispredicting the compares, which video clamps often,
-  // 144 cycles a pixel in Digimon World's opening movie.
-  int32_t r_terms[16], g_terms[16], b_terms[16];
+  // With the #else branch's results for any input: each chroma sample's terms once, by scalar code, then eight pixels
+  // a row in VMX, two vectors of four 32-bit lanes. Scalar throughout, it took 106 cycles a pixel in Digimon World's
+  // opening movie, its terms once a chroma sample and its clamps by masks. The terms aren't VMX as Xenon's VMX likely
+  // has no integer multiply: a build with vmulesh and vmulosh hung on the console, and Xenia implements none of them
+  // (xenia:src/xenia/cpu/ppc/ppc_emit_altivec.cc, InstrEmit_vmulesh). Loads and stores are aligned: m_blocks and
+  // m_block_rgb are 16-byte aligned (mdec.h), a row of either starts on 16 bytes, and so do the terms' rows.
+  static_assert(alignof(MDEC) >= 16, "YUVToRGB_Old's vector loads and stores need MDEC 16-byte aligned");
+  typedef __vector signed short Halves;
+  typedef __vector signed int Words;
+  typedef __vector unsigned int Unsigned;
+  // Each chroma row's terms, each twice, once for each pixel of the pair it colours.
+  alignas(16) int32_t r_terms[4][8], g_terms[4][8], b_terms[4][8];
   for (uint32_t cy = 0; cy < 4; cy++)
   {
     for (uint32_t cx = 0; cx < 4; cx++)
     {
       const int32_t Cr = Crblk[(xx / 2 + cx) + (yy / 2 + cy) * 8];
       const int32_t Cb = Cbblk[(xx / 2 + cx) + (yy / 2 + cy) * 8];
-      r_terms[cx + cy * 4] = (COEF_CR_TO_R * Cr) / COEF_ONE;
-      b_terms[cx + cy * 4] = (COEF_CB_TO_B * Cb) / COEF_ONE;
-      g_terms[cx + cy * 4] = ((COEF_CB_TO_G * Cb) + (COEF_CR_TO_G * Cr)) / COEF_ONE;
+      r_terms[cy][cx * 2] = r_terms[cy][cx * 2 + 1] = (COEF_CR_TO_R * Cr) / COEF_ONE;
+      b_terms[cy][cx * 2] = b_terms[cy][cx * 2 + 1] = (COEF_CB_TO_B * Cb) / COEF_ONE;
+      g_terms[cy][cx * 2] = g_terms[cy][cx * 2 + 1] = ((COEF_CB_TO_G * Cb) + (COEF_CR_TO_G * Cr)) / COEF_ONE;
     }
   }
-  // std::clamp(value, -128, 127) by masks.
-  const auto clamp = [](int32_t value) {
-    const int32_t over = value - 127;
-    value -= over & ~(over >> 31);
-    const int32_t under = value + 128;
-    return value - (under & (under >> 31));
+  const Unsigned shift8 = vec_splats(8u), shift16 = vec_splats(16u), halfword = vec_splats(0xFFFFu);
+  const Words low = vec_splats(-128), high = vec_splats(127), offset = vec_splats(static_cast<int>(addval));
+  // A channel's 16 bits as static_cast<uint16_t>(std::clamp(Y + term, -128, 127) + addval) has them.
+  const auto channel = [&](Words luma, const int32_t* terms) {
+    const Words term = vec_ld(0, reinterpret_cast<const int*>(terms));
+    return vec_and((Unsigned)vec_add(vec_min(vec_max(vec_add(luma, term), low), high), offset), halfword);
   };
   for (uint32_t y = 0; y < 8; y++)
   {
-    for (uint32_t x = 0; x < 8; x++)
+    const Halves luma = vec_ld(0, &Yblk[y * 8]);
+    const Words lumas[2] = {vec_unpackh(luma), vec_unpackl(luma)};
+    for (uint32_t half = 0; half < 2; half++)
     {
-      const uint32_t c = x / 2 + (y / 2) * 4;
-      const int32_t Y = Yblk[x + y * 8];
-      const uint32_t R = static_cast<uint16_t>(clamp(Y + r_terms[c]) + addval);
-      const uint32_t G = static_cast<uint16_t>(clamp(Y + g_terms[c]) + addval);
-      const uint32_t B = static_cast<uint16_t>(clamp(Y + b_terms[c]) + addval);
-      m_block_rgb[(x + xx) + ((y + yy) * 16)] = R | (G << 8) | (B << 16);
+      const Unsigned r = channel(lumas[half], &r_terms[y / 2][half * 4]);
+      const Unsigned g = channel(lumas[half], &g_terms[y / 2][half * 4]);
+      const Unsigned b = channel(lumas[half], &b_terms[y / 2][half * 4]);
+      vec_st(vec_or(vec_or(r, vec_sl(g, shift8)), vec_sl(b, shift16)), 0,
+             reinterpret_cast<unsigned int*>(&m_block_rgb[xx + half * 4 + (y + yy) * 16]));
     }
   }
 #else

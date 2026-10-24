@@ -141,12 +141,21 @@ private:
   std::array<int16_t, 64> m_scale_table{};
 
   // blocks, for colour: 0 - Crblk, 1 - Cbblk, 2-5 - Y 1-4
+#ifdef __XSDK__
+  // 16-byte aligned, as m_block_rgb, for YUVToRGB_Old's vector loads and stores.
+  alignas(16) std::array<std::array<int16_t, 64>, NUM_BLOCKS> m_blocks;
+#else
   std::array<std::array<int16_t, 64>, NUM_BLOCKS> m_blocks;
+#endif
   uint32_t m_current_block = 0;        // block (0-5)
   uint32_t m_current_coefficient = 64; // k (in block)
   uint16_t m_current_q_scale = 0;
 
+#ifdef __XSDK__
+  alignas(16) std::array<uint32_t, 256> m_block_rgb{};
+#else
   std::array<uint32_t, 256> m_block_rgb{};
+#endif
   std::unique_ptr<TimingEvent> m_block_copy_out_event;
 
   uint32_t m_total_blocks_decoded = 0;
