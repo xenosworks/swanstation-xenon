@@ -111,6 +111,14 @@ void SPU::Reset()
   UpdateEventInterval();
 }
 
+#ifdef MSB_FIRST
+// The ADSR register's halfwords sit high one first on a big-endian host, so indices 4 and 5 swap places.
+ALWAYS_INLINE static uint32_t VoiceRegisterIndex(uint32_t index)
+{
+  return (index == 4 || index == 5) ? (index ^ 1) : index;
+}
+#endif
+
 bool SPU::DoState(StateWrapper& sw)
 {
 #ifdef MSB_FIRST
@@ -174,7 +182,12 @@ bool SPU::DoState(StateWrapper& sw)
   {
     Voice& v = m_voices[i];
     sw.Do(&v.current_address);
+#ifdef MSB_FIRST
+    for (uint32_t index = 0; index < NUM_VOICE_REGISTERS; index++)
+      sw.Do(&v.regs.index[VoiceRegisterIndex(index)]);
+#else
     sw.DoArray(v.regs.index, NUM_VOICE_REGISTERS);
+#endif
     sw.Do(&v.counter.bits);
     sw.Do(&v.current_block_flags.bits);
     sw.DoEx(&v.is_first_block, 47, false);
@@ -621,7 +634,11 @@ uint16_t SPU::ReadVoiceRegister(uint32_t offset)
   if (reg_index >= 6 && (voice.IsOn() || m_key_on_register & (1u << voice_index)))
     GeneratePendingSamples();
 
+#ifdef MSB_FIRST
+  return voice.regs.index[VoiceRegisterIndex(reg_index)];
+#else
   return voice.regs.index[reg_index];
+#endif
 }
 
 void SPU::WriteVoiceRegister(uint32_t offset, uint16_t value)

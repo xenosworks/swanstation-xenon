@@ -108,8 +108,13 @@ private:
     uint32_t bits;
     struct
     {
+#ifdef MSB_FIRST
+      uint16_t bits_high;
+      uint16_t bits_low;
+#else
       uint16_t bits_low;
       uint16_t bits_high;
+#endif
     };
 
     BitField<uint32_t, uint8_t, 0, 4> sustain_level;
