@@ -1,9 +1,11 @@
 # The console's test host, built by the XSDK branch of the top-level CMakeLists.txt: tests/harness/frontend.c with the
 # core linked in, packed into swanstation_test.xex. Beside it on the console go frontend.txt and bios.bin, which
 # tests/xenon/prepare.sh writes for each suite.
+enable_language(ASM)
 add_executable(swanstation_test
   ../harness/frontend.c
   ../harness/frontend_xsdk.c
+  ../../src/xenon/jit_pool.S
 )
 target_include_directories(swanstation_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/libretro"

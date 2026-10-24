@@ -1,6 +1,7 @@
 # The console's host, built by the XSDK branch of the top-level CMakeLists.txt: host.c with the core linked in, packed
 # into swanstation.xex. Beside it on the console go host.txt, the BIOS and the game (host.c's header).
-add_executable(swanstation host.c)
+enable_language(ASM)
+add_executable(swanstation host.c jit_pool.S)
 target_include_directories(swanstation PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.."
   "${CMAKE_CURRENT_SOURCE_DIR}/../../dep/libretro-common/include")
 target_link_libraries(swanstation PRIVATE swanstation_libretro)
