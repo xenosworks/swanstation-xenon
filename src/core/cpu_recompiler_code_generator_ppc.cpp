@@ -1259,8 +1259,37 @@ void CodeGenerator::EmitAddCPUStructField(uint32_t offset, const Value& value)
 // Guest memory is a little-endian image, so a multi-byte load or store is the byte-reversed form, which costs what the
 // plain one does (docs/HARDWARE.md, "Byte-reversed loads and stores cost what plain ones do"). Only X-form has them:
 // the address goes in a register.
+// The scratchpad is CPU::g_state's, so a short offset from RCPUPTR reaches it where a constant address takes two
+// instructions.
+static bool GetCPUStateOffset(const void* ptr, int32_t* offset)
+{
+  const uintptr_t delta = reinterpret_cast<uintptr_t>(ptr) - reinterpret_cast<uintptr_t>(&g_state);
+  if (delta > 0x7FFF)
+    return false;
+
+  *offset = static_cast<int32_t>(delta);
+  return true;
+}
+
 void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* ptr)
 {
+  int32_t offset;
+  if (GetCPUStateOffset(ptr, &offset))
+  {
+    if (size == RegSize_8)
+    {
+      m_emit->lbz(host_reg, offset, RCPUPTR);
+      return;
+    }
+
+    m_emit->li(RSCRATCH, offset);
+    if (size == RegSize_16)
+      m_emit->lhbrx(host_reg, RCPUPTR, RSCRATCH);
+    else
+      m_emit->lwbrx(host_reg, RCPUPTR, RSCRATCH);
+    return;
+  }
+
   EmitLoadGlobalAddress(RSCRATCH, ptr);
   switch (size)
   {
@@ -1284,6 +1313,23 @@ void CodeGenerator::EmitLoadGlobal(HostReg host_reg, RegSize size, const void* p
 void CodeGenerator::EmitStoreGlobal(void* ptr, const Value& value)
 {
   const HostReg value_reg = RegisterOrScratch(m_emit, value, RSCRATCH2);
+
+  int32_t offset;
+  if (GetCPUStateOffset(ptr, &offset))
+  {
+    if (value.size == RegSize_8)
+    {
+      m_emit->stb(value_reg, offset, RCPUPTR);
+      return;
+    }
+
+    m_emit->li(RSCRATCH, offset);
+    if (value.size == RegSize_16)
+      m_emit->sthbrx(value_reg, RCPUPTR, RSCRATCH);
+    else
+      m_emit->stwbrx(value_reg, RCPUPTR, RSCRATCH);
+    return;
+  }
 
   EmitLoadGlobalAddress(RSCRATCH, ptr);
   switch (value.size)
