@@ -1,6 +1,7 @@
 #include "cd_image.h"
 #include "cd_subchannel_replacement.h"
 #include "file_system.h"
+#include "little_endian.h"
 #include "log.h"
 #include <formats/data_transfer.h>
 #include <algorithm>
@@ -84,8 +85,7 @@ bool CDImagePPF::Open(const char* filename, std::unique_ptr<CDImage> parent_imag
 
   const uint32_t data_len = static_cast<uint32_t>(data_len_sz);
 
-  uint32_t magic;
-  std::memcpy(&magic, data, sizeof(magic));
+  const uint32_t magic = LoadLE32(data);
 
   // work out the offset from the start of the parent image which we need to patch
   // i.e. the two second implicit pregap on data sectors
@@ -122,13 +122,12 @@ uint32_t CDImagePPF::ReadFileIDDiz(const uint8_t* data, uint32_t len, uint32_t v
     Log_WarningPrintf("Failed to read diz magic");
     return 0;
   }
-  std::memcpy(&magic, &data[len - (lenidx + 4)], sizeof(magic));
+  magic = LoadLE32(&data[len - (lenidx + 4)]);
 
   if (magic != 0x5A49442E) // .DIZ
     return 0;
 
-  uint32_t dlen = 0;
-  std::memcpy(&dlen, &data[len - lenidx], lenidx);
+  const uint32_t dlen = (lenidx == 2) ? LoadLE16(&data[len - lenidx]) : LoadLE32(&data[len - lenidx]);
 
   if (dlen > len)
   {
@@ -173,7 +172,7 @@ bool CDImagePPF::ReadV1Patch(const uint8_t* data, uint32_t len)
       return false;
     }
 
-    std::memcpy(&offset, &data[pos], sizeof(offset));
+    offset = LoadLE32(&data[pos]);
     chunk_size = data[pos + sizeof(offset)];
     pos += sizeof(offset) + sizeof(chunk_size);
     count -= sizeof(offset) + sizeof(chunk_size);
@@ -211,6 +210,7 @@ bool CDImagePPF::ReadV2Patch(const uint8_t* data, uint32_t len)
   const uint32_t idlen = ReadFileIDDiz(data, len, 2);
 
   std::memcpy(&origlen, &data[56], sizeof(origlen));
+  origlen = SwapLE32(origlen);
 
   // do blockcheck
   {
@@ -254,7 +254,7 @@ bool CDImagePPF::ReadV2Patch(const uint8_t* data, uint32_t len)
       return false;
     }
 
-    std::memcpy(&offset, &data[pos], sizeof(offset));
+    offset = LoadLE32(&data[pos]);
     chunk_size = data[pos + sizeof(offset)];
     pos += sizeof(offset) + sizeof(chunk_size);
     count -= sizeof(offset) + sizeof(chunk_size);
@@ -327,7 +327,7 @@ bool CDImagePPF::ReadV3Patch(const uint8_t* data, uint32_t len)
       return false;
     }
 
-    std::memcpy(&offset, &data[pos], sizeof(offset));
+    offset = static_cast<uint64_t>(LoadLE32(&data[pos])) | (static_cast<uint64_t>(LoadLE32(&data[pos + 4])) << 32);
     chunk_size = data[pos + sizeof(offset)];
     pos += sizeof(offset) + sizeof(chunk_size);
     count -= sizeof(offset) + sizeof(chunk_size);

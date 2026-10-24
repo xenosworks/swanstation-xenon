@@ -2,6 +2,7 @@
 #include "cd_subchannel_replacement.h"
 #include "error.h"
 #include "file_system.h"
+#include "little_endian.h"
 #include "log.h"
 #include <cerrno>
 #include <cstring>
@@ -97,8 +98,7 @@ bool CDImageMds::OpenAndParse(const char* filename, Common::Error* error)
     return false;
   }
 
-  uint32_t session_offset;
-  std::memcpy(&session_offset, &mds[0x50], sizeof(session_offset));
+  const uint32_t session_offset = LoadLE32(&mds[0x50]);
   if ((session_offset + 24) > mds.size())
   {
     Log_ErrorPrintf("Invalid session offset in '%s'", filename);
@@ -108,10 +108,8 @@ bool CDImageMds::OpenAndParse(const char* filename, Common::Error* error)
     return false;
   }
 
-  uint16_t track_count;
-  uint32_t track_offset;
-  std::memcpy(&track_count, &mds[session_offset + 14], sizeof(track_count));
-  std::memcpy(&track_offset, &mds[session_offset + 20], sizeof(track_offset));
+  const uint16_t track_count = LoadLE16(&mds[session_offset + 14]);
+  uint32_t track_offset = LoadLE32(&mds[session_offset + 20]);
   if (track_count > 99 || track_offset >= mds.size())
   {
     Log_ErrorPrintf("Invalid track count/block offset %u/%u in '%s'", track_count, track_offset, filename);
@@ -144,6 +142,8 @@ bool CDImageMds::OpenAndParse(const char* filename, Common::Error* error)
 
     TrackEntry track;
     std::memcpy(&track, &mds[track_offset], sizeof(track));
+    track.extra_offset = SwapLE32(track.extra_offset);
+    track.track_offset_in_mdf = SwapLE32(track.track_offset_in_mdf);
     track_offset += sizeof(TrackEntry);
 
     if (PackedBCDToBinary(track.track_number) != track_number)
@@ -171,10 +171,8 @@ bool CDImageMds::OpenAndParse(const char* filename, Common::Error* error)
     uint32_t track_start_lba = Position::FromBCD(track.start_m, track.start_s, track.start_f).ToLBA();
     uint32_t track_file_offset = track.track_offset_in_mdf;
 
-    uint32_t track_pregap;
-    uint32_t track_length;
-    std::memcpy(&track_pregap, &mds[track.extra_offset], sizeof(track_pregap));
-    std::memcpy(&track_length, &mds[track.extra_offset + sizeof(uint32_t)], sizeof(track_length));
+    const uint32_t track_pregap = LoadLE32(&mds[track.extra_offset]);
+    const uint32_t track_length = LoadLE32(&mds[track.extra_offset + sizeof(uint32_t)]);
 
     // precompute subchannel q flags for the whole track
     // todo: pull from mds?

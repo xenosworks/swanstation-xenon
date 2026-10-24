@@ -1,5 +1,6 @@
 #include "cd_image.h"
 #include "file_system.h"
+#include "little_endian.h"
 #include "log.h"
 #include "string_util.h"
 #include <array>
@@ -360,7 +361,7 @@ void CDImage::GenerateSubChannelQ(SubChannelQ* subq, const Index& index, uint32_
 
   const Position absolute_position = Position::FromLBA(index.start_lba_on_disc + index_offset);
   std::tie(subq->absolute_minute_bcd, subq->absolute_second_bcd, subq->absolute_frame_bcd) = absolute_position.ToBCD();
-  subq->crc = SubChannelQ::ComputeCRC(subq->data);
+  StoreLE16(&subq->data[10], SubChannelQ::ComputeCRC(subq->data));
 }
 
 void CDImage::AddLeadOutIndex()
@@ -409,5 +410,5 @@ uint16_t CDImage::SubChannelQ::ComputeCRC(const Data& data)
 
 bool CDImage::SubChannelQ::IsCRCValid() const
 {
-  return crc == ComputeCRC(data);
+  return LoadLE16(&data[10]) == ComputeCRC(data);
 }

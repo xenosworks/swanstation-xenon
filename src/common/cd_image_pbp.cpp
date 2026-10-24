@@ -2,6 +2,7 @@
 #include "cd_subchannel_replacement.h"
 #include "error.h"
 #include "file_system.h"
+#include "little_endian.h"
 #include "log.h"
 #include "pbp_types.h"
 #include "string.h"
@@ -143,6 +144,10 @@ bool CDImagePBP::LoadPBPHeader()
     return false;
   }
 
+  m_pbp_header.version = SwapLE32(m_pbp_header.version);
+  for (uint32_t& offset : m_pbp_header.offsets)
+    offset = SwapLE32(offset);
+
   return true;
 }
 
@@ -160,6 +165,11 @@ bool CDImagePBP::LoadSFOHeader()
     return false;
   }
 
+  m_sfo_header.version = SwapLE32(m_sfo_header.version);
+  m_sfo_header.key_table_offset = SwapLE32(m_sfo_header.key_table_offset);
+  m_sfo_header.data_table_offset = SwapLE32(m_sfo_header.data_table_offset);
+  m_sfo_header.num_table_entries = SwapLE32(m_sfo_header.num_table_entries);
+
   return true;
 }
 
@@ -174,6 +184,15 @@ bool CDImagePBP::LoadSFOIndexTable()
   if (rfread(m_sfo_index_table.data(), sizeof(SFOIndexTableEntry), m_sfo_header.num_table_entries, m_file) !=
       m_sfo_header.num_table_entries)
     return false;
+
+  for (SFOIndexTableEntry& entry : m_sfo_index_table)
+  {
+    entry.key_offset = SwapLE16(entry.key_offset);
+    entry.data_type = SwapLE16(entry.data_type);
+    entry.data_size = SwapLE32(entry.data_size);
+    entry.data_total_size = SwapLE32(entry.data_total_size);
+    entry.data_offset = SwapLE32(entry.data_offset);
+  }
 
   return true;
 }
@@ -234,7 +253,7 @@ bool CDImagePBP::LoadSFOTable()
         return false;
       }
 
-      m_sfo_table.emplace(std::string(key_cstr), val);
+      m_sfo_table.emplace(std::string(key_cstr), SwapLE32(val));
     }
     else
     {
@@ -372,6 +391,8 @@ bool CDImagePBP::Open(const char* filename, Common::Error* error)
     uint32_t disc_table[DISC_TABLE_NUM_ENTRIES] = {};
     if (rfread(disc_table, sizeof(uint32_t), DISC_TABLE_NUM_ENTRIES, m_file) != DISC_TABLE_NUM_ENTRIES)
       return false;
+    for (uint32_t& disc_offset : disc_table)
+      disc_offset = SwapLE32(disc_offset);
 
     // Ignore encrypted files
     if (disc_table[0] == 0x44475000) // "\0PGD"
@@ -474,6 +495,7 @@ bool CDImagePBP::OpenDisc(uint32_t index, Common::Error* error)
 
   if (rfread(&pgd_magic, sizeof(pgd_magic), 1, m_file) != 1)
     return false;
+  pgd_magic = SwapLE32(pgd_magic);
 
   if (pgd_magic == 0x44475000) // "\0PGD"
   {
@@ -504,6 +526,7 @@ bool CDImagePBP::OpenDisc(uint32_t index, Common::Error* error)
   uint32_t iso_offset;
   if (rfread(&iso_offset, sizeof(iso_offset), 1, m_file) != 1)
     return false;
+  iso_offset = SwapLE32(iso_offset);
 
   // Generate block info table
   if (FileSystem::FSeek64(m_file, iso_header_start + 0x4000, SEEK_SET) != 0)
@@ -514,6 +537,8 @@ bool CDImagePBP::OpenDisc(uint32_t index, Common::Error* error)
     BlockTableEntry bte;
     if (rfread(&bte, sizeof(bte), 1, m_file) != 1)
       return false;
+    bte.offset = SwapLE32(bte.offset);
+    bte.size = SwapLE16(bte.size);
 
     // Only store absolute file offset into a BlockInfo if this is a valid block
     m_blockinfo_table[i] = {(bte.size != 0) ? (iso_header_start + iso_offset + bte.offset) : 0, bte.size};

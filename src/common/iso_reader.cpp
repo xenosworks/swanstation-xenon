@@ -1,5 +1,6 @@
 #include "iso_reader.h"
 #include "cd_image.h"
+#include "little_endian.h"
 #include "log.h"
 #include <cctype>
 #include <cstring>
@@ -70,7 +71,7 @@ std::optional<ISOReader::ISODirectoryEntry> ISOReader::LocateFile(const char* pa
   }
 
   // start at the root directory
-  return LocateFile(path, sector_buffer, root_de->location_le, root_de->length_le);
+  return LocateFile(path, sector_buffer, SwapLE32(root_de->location_le), SwapLE32(root_de->length_le));
 }
 
 std::optional<ISOReader::ISODirectoryEntry> ISOReader::LocateFile(const char* path, uint8_t* sector_buffer,
@@ -158,7 +159,7 @@ std::optional<ISOReader::ISODirectoryEntry> ISOReader::LocateFile(const char* pa
 
       // if it is a directory, recurse into it
       if (de->flags & ISODirectoryEntryFlag_Directory)
-        return LocateFile(path_component_end, sector_buffer, de->location_le, de->length_le);
+        return LocateFile(path_component_end, sector_buffer, SwapLE32(de->location_le), SwapLE32(de->length_le));
 
       // we're looking for a directory but got a file
       Log_ErrorPrintf("Looking for directory but got file");
@@ -185,20 +186,21 @@ bool ISOReader::ReadFile(const char* path, std::vector<uint8_t>* data)
     return false;
   }
 
-  if (!m_image->Seek(m_track_number, de->location_le))
+  if (!m_image->Seek(m_track_number, SwapLE32(de->location_le)))
     return false;
 
-  if (de->length_le == 0)
+  const uint32_t length = SwapLE32(de->length_le);
+  if (length == 0)
   {
     data->clear();
     return true;
   }
 
-  const uint32_t num_sectors = (de->length_le + (SECTOR_SIZE - 1)) / SECTOR_SIZE;
+  const uint32_t num_sectors = (length + (SECTOR_SIZE - 1)) / SECTOR_SIZE;
   data->resize(num_sectors * uint64_t(SECTOR_SIZE));
   if (m_image->Read(CDImage::ReadMode::DataOnly, num_sectors, data->data()) != num_sectors)
     return false;
 
-  data->resize(de->length_le);
+  data->resize(length);
   return true;
 }
