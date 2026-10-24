@@ -4,6 +4,26 @@
 #include "cpu_core_private.h"
 #include "system.h"
 #include <limits>
+#ifdef __XSDK__
+#include "common/xenon_profile.h"
+
+XenonProfile xenon_profile;
+
+// Adds a callback's ticks to its event's count, finding the event by its name's address, which lasts as long as it.
+static void ProfileEvent(const char* name, uint32_t ticks)
+{
+  uint32_t i = 0;
+  while (i < xenon_profile.event_count && xenon_profile.event_names[i] != name)
+    i++;
+  if (i == xenon_profile.event_count)
+  {
+    if (i == XENON_PROFILE_EVENTS)
+      return;
+    xenon_profile.event_names[xenon_profile.event_count++] = name;
+  }
+  xenon_profile.event_ticks[i] += ticks;
+}
+#endif
 
 namespace TimingEvents {
 
@@ -273,7 +293,13 @@ void RunEvents()
       event->m_time_since_last_run = 0;
 
       // The cycles_late is only an indicator, it doesn't modify the cycles to execute.
+#ifdef __XSDK__
+      const uint32_t start = xenon_profile_now();
       event->m_callback(event->m_callback_param, ticks_to_execute, ticks_late);
+      ProfileEvent(event->m_name.c_str(), xenon_profile_now() - start);
+#else
+      event->m_callback(event->m_callback_param, ticks_to_execute, ticks_late);
+#endif
       if (event->m_active)
         SortEvent(event);
     }

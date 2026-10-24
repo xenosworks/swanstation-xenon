@@ -8,6 +8,10 @@
 #include <retro_spsc.h>
 #include <rthreads/retro_eventcount.h>
 #include <rthreads/rthreads.h>
+#ifdef __XSDK__
+#include "common/xenon_profile.h"
+#include "xsdk/thread.h"
+#endif
 Log_SetChannel(GPUBackend);
 
 struct GPUBackend::ThreadState
@@ -182,6 +186,9 @@ void* GPUBackend::AllocateCommand(GPUBackendCommandType command, uint32_t size)
 
 void GPUBackend::WaitForSpace(size_t bytes)
 {
+#ifdef __XSDK__
+  XenonProfileScope profile(&xenon_profile.gpu_space_ticks);
+#endif
   ThreadState* t = m_thread.get();
   retro_spsc_t* q = &t->ring;
   const size_t head = retro_atomic_load_relaxed_size(&q->head);
@@ -266,6 +273,9 @@ void GPUBackend::Sync(bool allow_sleep)
 {
   if (!m_use_gpu_thread)
     return;
+#ifdef __XSDK__
+  XenonProfileScope profile(&xenon_profile.gpu_sync_ticks);
+#endif
 
   ThreadState* t = m_thread.get();
   GPUBackendSyncCommand* cmd =
@@ -292,6 +302,13 @@ void GPUBackend::Sync(bool allow_sleep)
 
 void GPUBackend::GPUThreadEntryPoint(void* userdata)
 {
+#ifdef __XSDK__
+  // On the second core: unplaced, a thread runs on its creator's hardware thread (xsdk's include/xsdk/thread.h), here
+  // the CPU thread's, and takes turns with it.
+  const NTSTATUS status = xsdk_thread_move(2);
+  Log_InfoPrintf("GPU thread on hardware thread %u (moving it returned 0x%08X)", xsdk_thread_hardware_thread(),
+                 static_cast<unsigned>(status));
+#endif
   static_cast<GPUBackend*>(userdata)->RunGPULoop();
 }
 
@@ -331,6 +348,9 @@ void GPUBackend::RunGPULoop()
     }
 
     allow_sleep = false;
+#ifdef __XSDK__
+    XenonProfileScope profile(&xenon_profile.gpu_thread_ticks);
+#endif
     const uint8_t* const base = static_cast<const uint8_t*>(data);
     for (size_t offset = 0; offset < avail;)
     {

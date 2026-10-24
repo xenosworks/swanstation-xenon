@@ -18,6 +18,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "common/xenon_profile.h"
 #include "swanstation_shaders.h"
 #include "xsdk/gpu.h"
 #include "xsdk/kernel.h"
@@ -26,6 +27,7 @@
 #include "xsdk/shader.h"
 #include "xsdk/splash.h"
 #include "xsdk/texture.h"
+#include "xsdk/thread.h"
 
 enum {
 	SPLASH_MS = 2000,
@@ -37,6 +39,8 @@ enum {
 	LINE_BYTES = 512,
 	MAX_CAPTURES = 8,
 	REPORT_FRAMES = 300,
+	// The time base's rate (xsdk's docs/HARDWARE.md, "The time base runs at 49.875 MHz").
+	TIME_BASE_HZ = 49875000,
 	// A trigger past a quarter of its travel presses L2 or R2.
 	TRIGGER_PRESSED = 64,
 	CORNERS = 4,
@@ -106,6 +110,8 @@ static Config config;
 static Screen screen;
 static enum retro_pixel_format pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static uint32_t frame_number;
+// Copying the core's frames into the texture, inside the core's frames, over a report (common/xenon_profile.h).
+static uint32_t upload_ticks;
 // The joypad's buttons as a bitmask of libretro's ids, read once a frame.
 static int16_t joypad;
 
@@ -260,11 +266,21 @@ static void capture(const void *data, unsigned width, unsigned height, size_t pi
 	xsdk_log_write("swanstation: captured frame %u, %ux%u, as %s", (unsigned)frame_number, width, height, name);
 }
 
-// Copies the core's frame into the texture, made again whenever the frame's size or format changes.
+static void copy_frame(const void *data, unsigned width, unsigned height, size_t pitch);
+
+// Copies the core's frame into the texture, timed for the report.
 static void video_refresh(const void *data, unsigned width, unsigned height, size_t pitch)
 {
 	if (!data)
 		return;
+	const uint32_t start = xenon_profile_now();
+	copy_frame(data, width, height, pitch);
+	upload_ticks += xenon_profile_now() - start;
+}
+
+// Copies the core's frame into the texture, made again whenever the frame's size or format changes.
+static void copy_frame(const void *data, unsigned width, unsigned height, size_t pitch)
+{
 	for (uint32_t i = 0; i < config.capture_count; i++) {
 		if (config.captures[i] == frame_number)
 			capture(data, width, height, pitch);
@@ -399,6 +415,43 @@ static void draw(uint32_t address, uint32_t width, uint32_t height)
 	screen.fence = xsdk_gpu_fence();
 }
 
+// The ticks a frame, over a report's frames, in ms.
+static double frame_ms(uint32_t ticks)
+{
+	return ticks / (TIME_BASE_HZ / 1000.0) / REPORT_FRAMES;
+}
+
+// Where the core's time went over the report: each timed event, the CPU thread's waits for the GPU thread, the copy of
+// the frames, and what's left, the CPU itself; and the GPU thread's work beside them. The GPU sync before a frame is
+// shown runs inside the GPU's CRTC event, and is in its time too. Clears the counts for the next report.
+static void log_profile(uint64_t core_us)
+{
+	char events[LINE_BYTES] = "";
+	size_t used = 0;
+	uint32_t event_ticks = 0;
+	for (uint32_t i = 0; i < xenon_profile.event_count && used < sizeof events; i++) {
+		used += (size_t)snprintf(events + used, sizeof events - used, "%s%s %.2f", i ? ", " : "",
+			xenon_profile.event_names[i], frame_ms(xenon_profile.event_ticks[i]));
+		event_ticks += xenon_profile.event_ticks[i];
+		xenon_profile.event_ticks[i] = 0;
+	}
+	const double core_ms = core_us / 1000.0 / REPORT_FRAMES;
+	// Samples the SPU makes in its own "SPU Sample" event would count twice, there and here; the log shows when it
+	// runs.
+	const double cpu_ms = core_ms - frame_ms(event_ticks) - frame_ms(xenon_profile.gpu_space_ticks) -
+		frame_ms(upload_ticks) - frame_ms(xenon_profile.spu_ticks);
+	xsdk_log_write(
+		"swanstation: ms a frame: events %.2f (%s); waiting for the GPU thread %.2f to sync and %.2f for room; "
+		"the SPU %.2f; copying the frame %.2f; the CPU the rest, %.2f; the GPU thread busy %.2f",
+		frame_ms(event_ticks), events, frame_ms(xenon_profile.gpu_sync_ticks), frame_ms(xenon_profile.gpu_space_ticks),
+		frame_ms(xenon_profile.spu_ticks), frame_ms(upload_ticks), cpu_ms, frame_ms(xenon_profile.gpu_thread_ticks));
+	xenon_profile.gpu_thread_ticks = 0;
+	xenon_profile.gpu_sync_ticks = 0;
+	xenon_profile.gpu_space_ticks = 0;
+	xenon_profile.spu_ticks = 0;
+	upload_ticks = 0;
+}
+
 // Runs the core a frame at a time, each shown as the display's next, until frames= or the title is left; logs the
 // core's time a frame over each REPORT_FRAMES.
 static void run(uint32_t width, uint32_t height, double core_fps)
@@ -428,6 +481,7 @@ static void run(uint32_t width, uint32_t height, double core_fps)
 				"%.2f its %.2f fps allow; %.2f frames a second shown",
 				(unsigned)(frame_number + 1 - REPORT_FRAMES), (unsigned)frame_number, core_us / 1000.0 / REPORT_FRAMES,
 				longest_core_us / 1000.0, 1000.0 / core_fps, core_fps, REPORT_FRAMES * 1e6 / period_us);
+			log_profile(core_us);
 			period_start = now_us();
 			core_us = 0;
 			longest_core_us = 0;
@@ -439,8 +493,8 @@ int main(void)
 {
 	if (!read_config())
 		return 1;
-	xsdk_log_write("swanstation: %s with the %s CPU, %s", config.game, config.cpu,
-		config.frames ? "for a fixed count of frames" : "until Xbox Home");
+	xsdk_log_write("swanstation: %s with the %s CPU, %s, on hardware thread %u", config.game, config.cpu,
+		config.frames ? "for a fixed count of frames" : "until Xbox Home", (unsigned)xsdk_thread_hardware_thread());
 	const NTSTATUS splash = xsdk_splash_show(SPLASH_MS);
 	if (!NT_SUCCESS(splash))
 		xsdk_log_write("swanstation: xsdk_splash_show failed: 0x%08X", (unsigned)splash);

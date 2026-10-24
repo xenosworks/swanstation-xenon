@@ -3,6 +3,9 @@
 #include "common/log.h"
 #include <rthreads/retro_eventcount.h>
 #include <rthreads/rthreads.h>
+#ifdef __XSDK__
+#include "xsdk/thread.h"
+#endif
 Log_SetChannel(CDROMAsyncReader);
 
 enum class CDROMAsyncReader::Op : uint8_t
@@ -279,6 +282,13 @@ void CDROMAsyncReader::RunOnWorker(Op op, CDImage::LBA lba, CDImage::SubChannelQ
 
 void CDROMAsyncReader::WorkerThreadEntryPoint(void* userdata)
 {
+#ifdef __XSDK__
+  // On the third core, off the CPU thread's hardware thread, where an unplaced thread would run (xsdk's
+  // include/xsdk/thread.h).
+  const NTSTATUS status = xsdk_thread_move(4);
+  Log_InfoPrintf("CD-ROM read thread on hardware thread %u (moving it returned 0x%08X)", xsdk_thread_hardware_thread(),
+                 static_cast<unsigned>(status));
+#endif
   ThreadState* t = static_cast<ThreadState*>(userdata);
   t->owner->WorkerThread(t);
 }

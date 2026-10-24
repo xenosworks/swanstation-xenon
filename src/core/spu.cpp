@@ -10,6 +10,9 @@
 #include "system.h"
 #include <cstring>
 #include <limits>
+#ifdef __XSDK__
+#include "common/xenon_profile.h"
+#endif
 #define SPU_TriggerRAMIRQ() \
   m_SPUSTAT.irq9_flag = true; \
   g_interrupt_controller.InterruptRequest(InterruptController::IRQ::SPU)
@@ -1689,6 +1692,9 @@ void SPU::ProcessReverb(int16_t left_in, int16_t right_in, int32_t* left_out, in
 
 void SPU::Execute(TickCount ticks)
 {
+#ifdef __XSDK__
+  XenonProfileScope profile(&xenon_profile.spu_ticks);
+#endif
   uint32_t remaining_frames;
   if (g_settings.cpu_overclock_active)
   {
