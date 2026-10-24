@@ -1,6 +1,6 @@
 // swanstation: SwanStation on the Xbox 360, its libretro core linked in and driven from here (xsdk's
 // docs/scope/62-swanstation.md). It opens the game picker (picker.cpp) on the games in games\ beside the .xex and on
-// USB drives; holding Back and Start for a second in a game opens the pause menu. host.txt beside the .xex, which can
+// USB drives; pressing both sticks in for a second in a game opens the pause menu. host.txt beside the .xex, which can
 // be left out, changes that, one KEY=VALUE a line:
 //   game=game:\Spyro the Dragon.cue   starts that disc image, from any folder, without the picker
 //   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (the
@@ -67,7 +67,7 @@ enum {
 	AUDIO_WAIT_MS = 100,
 	// A frame of the core's past this, beyond a 60 Hz frame and then some, is logged with where its time went.
 	SLOW_FRAME_US = 20000,
-	// How long Back and Start are held together to open the pause menu.
+	// How long both sticks are pressed in together to open the pause menu.
 	PAUSE_HOLD_US = 1000000,
 	RELOAD_RUNS = 4,
 	RELOAD_FRAMES = 300,
@@ -154,7 +154,7 @@ static bool frames_running;
 static uint32_t upload_ticks;
 // The joypad's buttons as a bitmask of libretro's ids, read once a frame.
 static int16_t joypad;
-// When Back and Start were first held together, 0 while they aren't; and whether they've been held long enough.
+// When both sticks were first pressed in together, 0 while they aren't; and whether they've been held long enough.
 static uint64_t pause_held_since;
 static bool pause_requested;
 // After a menu, the game sees no buttons until every one is let go, so the A that resumed isn't the game's Cross.
@@ -495,8 +495,8 @@ static void log_audio(void)
 	audio_dropped = 0;
 }
 
-// Reads the pad for the core. Back and Start held together reach it as neither, so the game neither pauses nor takes
-// Select under the pause menu, and held a second they ask for the menu.
+// Reads the pad for the core. Both sticks pressed in together reach it as neither, and held a second they ask for the
+// pause menu. Not Back and Start: Aurora's plugin takes a screenshot on those.
 static void input_poll(void)
 {
 	INPUT_STATE input = { 0 };
@@ -509,7 +509,7 @@ static void input_poll(void)
 			return;
 		held_since_menu = false;
 	}
-	const uint16_t combination = INPUT_GAMEPAD_BACK | INPUT_GAMEPAD_START;
+	const uint16_t combination = INPUT_GAMEPAD_LEFT_THUMB | INPUT_GAMEPAD_RIGHT_THUMB;
 	if ((buttons & combination) == combination) {
 		const uint64_t now = now_us();
 		if (!pause_held_since)
@@ -755,10 +755,16 @@ static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *
 	return RUN_ENDED;
 }
 
-// Starts the game at path and runs it until it ends, how it ended in *end; false if the core couldn't load it.
+// Starts the game at path and runs it until it ends, how it ended in *end; false if its disc image doesn't open or the
+// core couldn't load it.
 static bool play_game(uint32_t width, uint32_t height, const char *path, RunEnd *end)
 {
 	xsdk_log_write("swanstation: starting %s", path);
+	// The core boots the BIOS with no disc in when the image doesn't open (core/system.cpp, System::Boot).
+	if (!disc_opens(path)) {
+		xsdk_log_write("swanstation: %s doesn't open", path);
+		return false;
+	}
 	const struct retro_game_info game = { .path = path };
 	if (!retro_load_game(&game)) {
 		xsdk_log_write("swanstation: the core couldn't load %s", path);
@@ -788,7 +794,7 @@ static void play(uint32_t width, uint32_t height)
 	for (;;) {
 		if (from_config)
 			snprintf(path, sizeof path, "%s", config.game);
-		else if (!picker_choose(width, height, start_failed, path, sizeof path))
+		else if (!picker_choose(width, height, start_failed ? path : NULL, path, sizeof path))
 			return;
 		from_config = false;
 		RunEnd end = RUN_TO_GAMES;

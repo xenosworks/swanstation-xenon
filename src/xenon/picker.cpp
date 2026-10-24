@@ -752,13 +752,17 @@ void picker_close(void)
 	ImGui::DestroyContext();
 }
 
-bool picker_choose(uint32_t width, uint32_t height, bool start_failed, char *path, size_t path_bytes)
+bool disc_opens(const char *path)
+{
+	return CDImage::Open(path, CDImage::OpenFlags::None, nullptr) != nullptr;
+}
+
+bool picker_choose(uint32_t width, uint32_t height, const char *failed_path, char *path, size_t path_bytes)
 {
 	scan();
-	// host.txt's game= starts without the picker, so no game picked may have failed.
-	const std::string message = start_failed ? (last_path.empty() ? "The disc" : stem(last_path)) +
-			" didn't start. Check that a PS1 BIOS is beside swanstation.xex."
-											 : std::string();
+	const std::string message = failed_path
+		? stem(failed_path) + " didn't start. Check its disc image, and that a PS1 BIOS is beside swanstation.xex."
+		: std::string();
 	size_t rest_frames = 0;
 	const Game *rested_on = nullptr;
 	for (;;) {

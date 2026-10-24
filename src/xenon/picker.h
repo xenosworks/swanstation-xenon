@@ -24,10 +24,12 @@ extern bool picker_shots;
 bool picker_open(void);
 void picker_close(void);
 // Shows the games on the hard drive and USB drives until one is started, its path written to path, true; false when
-// the player quits. start_failed says the last game picked didn't start, which a line under the list then says.
-bool picker_choose(uint32_t width, uint32_t height, bool start_failed, char *path, size_t path_bytes);
+// the player quits. failed_path, if not NULL, is a game that didn't start, which a line under the list then says.
+bool picker_choose(uint32_t width, uint32_t height, const char *failed_path, char *path, size_t path_bytes);
 // Shows the pause menu over the game's last frame, which draw_frame draws into the target set, until a choice.
 PauseChoice picker_pause(uint32_t width, uint32_t height, const char *game_path, void (*draw_frame)(void));
+// Whether the disc image at path opens, as the core opens it.
+bool disc_opens(const char *path);
 // host.txt's check=list: writes a fixture of files under game:\games_check, lists it as the picker would, and logs
 // whether the list is the one expected.
 bool picker_check_list(void);
