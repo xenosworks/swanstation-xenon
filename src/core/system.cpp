@@ -7,6 +7,7 @@
 #include "common/error.h"
 #include "common/file_system.h"
 #include "common/iso_reader.h"
+#include "common/little_endian.h"
 #include "common/log.h"
 #include "common/make_array.h"
 #include "common/state_wrapper.h"
@@ -1237,6 +1238,18 @@ void SetVerticalFrequency(float frequency)
   s_vertical_frequency = frequency;
 }
 
+#ifdef MSB_FIRST
+// A PS-EXE's numbers are little-endian.
+static void SwapPSEXEHeaderLE(BIOS::PSEXEHeader* header)
+{
+  uint32_t* const numbers[] = {&header->initial_pc,     &header->initial_gp,        &header->load_address,
+                               &header->file_size,      &header->memfill_start,     &header->memfill_size,
+                               &header->initial_sp_base, &header->initial_sp_offset};
+  for (uint32_t* number : numbers)
+    *number = SwapLE32(*number);
+}
+#endif
+
 static bool LoadEXEToRAM(const char* filename, bool patch_bios)
 {
   RFILE* fp = FileSystem::OpenRFile(filename, "rb");
@@ -1257,6 +1270,9 @@ static bool LoadEXEToRAM(const char* filename, bool patch_bios)
     rfclose(fp);
     return false;
   }
+#ifdef MSB_FIRST
+  SwapPSEXEHeaderLE(&header);
+#endif
 
   if (header.memfill_size > 0)
   {
@@ -1283,7 +1299,7 @@ static bool LoadEXEToRAM(const char* filename, bool patch_bios)
     uint32_t address = header.load_address;
     for (uint32_t i = 0; i < num_words; i++)
     {
-      CPU::SafeWriteMemoryWord(address, data_words[i]);
+      CPU::SafeWriteMemoryWord(address, SwapLE32(data_words[i]));
       address += sizeof(uint32_t);
     }
   }
@@ -1325,6 +1341,9 @@ bool InjectEXEFromBuffer(const void* buffer, uint32_t buffer_size, bool patch_bi
   const uint32_t file_size = static_cast<uint32_t>(buffer_end - buffer_ptr);
   if (!BIOS::IsValidPSExeHeader(header, file_size))
     return false;
+#ifdef MSB_FIRST
+  SwapPSEXEHeaderLE(&header);
+#endif
 
   if (header.memfill_size > 0)
   {
@@ -1350,7 +1369,7 @@ bool InjectEXEFromBuffer(const void* buffer, uint32_t buffer_size, bool patch_bi
     uint32_t address = header.load_address;
     for (uint32_t i = 0; i < num_words; i++)
     {
-      CPU::SafeWriteMemoryWord(address, data_words[i]);
+      CPU::SafeWriteMemoryWord(address, SwapLE32(data_words[i]));
       address += sizeof(uint32_t);
     }
   }

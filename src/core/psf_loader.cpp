@@ -1,6 +1,7 @@
 #include "psf_loader.h"
 #include "bios.h"
 #include "common/file_system.h"
+#include "common/little_endian.h"
 #include "system.h"
 #include "miniz.h"
 #include <cctype>
@@ -53,6 +54,9 @@ bool File::Load(const char* path)
   PSFHeader header;
   std::memcpy(&header, file_pointer, sizeof(header));
   file_pointer += sizeof(header);
+  header.reserved_area_size = SwapLE32(header.reserved_area_size);
+  header.compressed_program_size = SwapLE32(header.compressed_program_size);
+  header.program_crc32 = SwapLE32(header.program_crc32);
   if (header.id[0] != 'P' || header.id[1] != 'S' || header.id[2] != 'F' || header.version != 0x01 ||
       header.compressed_program_size == 0 ||
       (sizeof(header) + header.reserved_area_size + header.compressed_program_size) > file_size)
