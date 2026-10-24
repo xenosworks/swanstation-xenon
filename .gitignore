@@ -53,3 +53,6 @@ Generated Files
 
 # test harness
 __pycache__/
+
+# the console's test folders, which tests/xenon/prepare.sh writes
+/build-xenon-tests/
