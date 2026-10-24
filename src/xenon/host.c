@@ -1,12 +1,13 @@
 // swanstation: SwanStation on the Xbox 360, its libretro core linked in and driven from here (xsdk's
 // docs/scope/62-swanstation.md). host.txt beside the .xex says what to run, one KEY=VALUE a line:
 //   game=game:\Spyro the Dragon.cue   the disc image, from the title's folder or any other
-//   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (no fastmem yet)
-//   frames=1800                       ends the title after that many frames; without it, it runs until Xbox Home
+//   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (no fastmem
+//   yet) frames=1800                       ends the title after that many frames; without it, it runs until Xbox Home
 //   capture=600,1200                  writes the core's frame at those frames as capture_<frame>.ppm beside the .xex
 // The BIOS goes in the title's folder too, where the core looks for one by its contents. Frames are drawn 4:3 in the
-// middle of a 1280x720 display, pads are the PlayStation's digital pad, and sound isn't played yet. Every 300 frames
-// the log gives the time the core took for a frame, the scope's measure of full speed.
+// middle of a 1280x720 display, pads are the PlayStation's digital pad, and the sound plays from the front left and
+// right speakers. Every 300 frames the log gives the time the core took for a frame, the scope's measure of full
+// speed, and how the sound kept up.
 
 #include <libretro.h>
 #include <stdarg.h>
@@ -20,6 +21,7 @@
 
 #include "common/xenon_profile.h"
 #include "swanstation_shaders.h"
+#include "xsdk/audio.h"
 #include "xsdk/gpu.h"
 #include "xsdk/kernel.h"
 #include "xsdk/log.h"
@@ -45,7 +47,21 @@ enum {
 	TRIGGER_PRESSED = 64,
 	CORNERS = 4,
 	BLACK = 0xFF000000,
+	// The feeder's hardware thread: the third core's second, beside the CD-ROM read thread, which mostly waits.
+	AUDIO_HARDWARE_THREAD = 5,
+	AUDIO_STACK_BYTES = 64 * 1024,
+	// The ring's room, 186 ms at 44.1 kHz, a power of two; the fill the feeder steers for, 46 ms, about three of the
+	// core's frames of sound.
+	AUDIO_RING_FRAMES = 8192,
+	AUDIO_TARGET_FRAMES = 2048,
+	AUDIO_WAIT_MS = 100,
+	// A frame of the core's past this, beyond a 60 Hz frame and then some, is logged with where its time went.
+	SLOW_FRAME_US = 20000,
 };
+
+// How far the feeder's step leans with the ring's fill, either way: more than the 0.3% between the display's 60 Hz and
+// the PlayStation's 59.82, too little to hear.
+static const double AUDIO_RATE_LEAN = 0.005;
 
 // The core's files, the BIOS and memory cards, and the captures: the title's folder.
 static const char DATA_DIRECTORY[] = "game:";
@@ -110,10 +126,23 @@ static Config config;
 static Screen screen;
 static enum retro_pixel_format pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static uint32_t frame_number;
+// Whether the core's frames have started.
+static bool frames_running;
 // Copying the core's frames into the texture, inside the core's frames, over a report (common/xenon_profile.h).
 static uint32_t upload_ticks;
 // The joypad's buttons as a bitmask of libretro's ids, read once a frame.
 static int16_t joypad;
+// The core's sound, stereo 16-bit frames at its rate, from the core's thread to the feeder, which resamples it to the
+// console's 48 kHz: a ring with a writer each side, counting the frames put in and taken out.
+static int16_t audio_ring[AUDIO_RING_FRAMES][2];
+static uint32_t audio_head;
+static uint32_t audio_tail;
+// Frames the core gave while the ring was full, over a report.
+static uint32_t audio_dropped;
+// Samples the feeder played silent as the ring ran short, over a report: gaps in the sound. The feeder writes it.
+static uint32_t audio_starved;
+static double audio_rate_hz;
+static HANDLE audio_thread;
 
 static uint64_t now_us(void)
 {
@@ -169,7 +198,9 @@ static bool read_config(void)
 
 static void core_log(enum retro_log_level level, const char *format, ...)
 {
-	if (level < RETRO_LOG_INFO)
+	// Once frames run, only warnings and errors: each line is a write to the drive the game streams from, and the
+	// memory card's info line held a frame up 43 ms.
+	if (level < (frames_running ? RETRO_LOG_WARN : RETRO_LOG_INFO))
 		return;
 	char line[LINE_BYTES];
 	va_list arguments;
@@ -307,16 +338,124 @@ static void copy_frame(const void *data, unsigned width, unsigned height, size_t
 	xsdk_gpu_invalidate(screen.texture.address, screen.texture.size_bytes);
 }
 
-static void audio_sample(int16_t left, int16_t right)
-{
-	(void)left;
-	(void)right;
-}
-
+// Puts the core's frames in the ring for the feeder; frames past the ring's room are dropped, and counted.
 static size_t audio_sample_batch(const int16_t *data, size_t frames)
 {
-	(void)data;
+	const uint32_t tail = __atomic_load_n(&audio_tail, __ATOMIC_ACQUIRE);
+	uint32_t head = audio_head;
+	size_t i = 0;
+	for (; i < frames && head - tail < AUDIO_RING_FRAMES; i++, head++) {
+		audio_ring[head % AUDIO_RING_FRAMES][0] = data[2 * i];
+		audio_ring[head % AUDIO_RING_FRAMES][1] = data[2 * i + 1];
+	}
+	audio_dropped += (uint32_t)(frames - i);
+	__atomic_store_n(&audio_head, head, __ATOMIC_RELEASE);
 	return frames;
+}
+
+static void audio_sample(int16_t left, int16_t right)
+{
+	const int16_t frame[2] = { left, right };
+	audio_sample_batch(frame, 1);
+}
+
+// The feeder: fills each frame the render driver frees from the ring, each sample between the core's two nearest, and
+// plays silence from the ring running dry until it fills again. Its step through the core's samples leans up to
+// AUDIO_RATE_LEAN with the ring's fill, holding it near AUDIO_TARGET_FRAMES: the display's 60 Hz paces the core a
+// little off its own rate.
+static uint32_t audio_feed(void *context)
+{
+	(void)context;
+	const double base_step = audio_rate_hz / XSDK_AUDIO_RATE_HZ;
+	double position = 0.0;
+	// Off at the start and after the ring runs dry, until it holds AUDIO_TARGET_FRAMES again: one clean gap, not a
+	// crackle of short ones while the ring hovers near empty.
+	bool playing = false;
+	// Starting fills the driver's queue at once, so it starts with the queue's worth in the ring beyond the target.
+	const uint32_t start_frames =
+		AUDIO_TARGET_FRAMES + (uint32_t)(XSDK_AUDIO_FRAMES_AHEAD_DEFAULT * XSDK_AUDIO_FRAME_SAMPLES * base_step);
+	for (;;) {
+		float *frame;
+		const NTSTATUS status = xsdk_audio_next_frame(AUDIO_WAIT_MS, &frame);
+		if (status == STATUS_IO_TIMEOUT)
+			continue;
+		if (!NT_SUCCESS(status))
+			return 0;
+		const uint32_t head = __atomic_load_n(&audio_head, __ATOMIC_ACQUIRE);
+		uint32_t tail = audio_tail;
+		playing = playing || head - tail >= start_frames;
+		double fill = ((double)(head - tail) - AUDIO_TARGET_FRAMES) / AUDIO_TARGET_FRAMES;
+		fill = fill > 1.0 ? 1.0 : fill < -1.0 ? -1.0 : fill;
+		const double step = base_step * (1.0 + AUDIO_RATE_LEAN * fill);
+		float *const left = frame + XSDK_AUDIO_FRONT_LEFT * XSDK_AUDIO_FRAME_SAMPLES;
+		float *const right = frame + XSDK_AUDIO_FRONT_RIGHT * XSDK_AUDIO_FRAME_SAMPLES;
+		for (uint32_t i = 0; i < XSDK_AUDIO_FRAME_SAMPLES; i++) {
+			if (!playing || head - tail < 2) {
+				playing = false;
+				left[i] = 0.0f;
+				right[i] = 0.0f;
+				__atomic_fetch_add(&audio_starved, 1, __ATOMIC_RELAXED);
+				continue;
+			}
+			const int16_t *const a = audio_ring[tail % AUDIO_RING_FRAMES];
+			const int16_t *const b = audio_ring[(tail + 1) % AUDIO_RING_FRAMES];
+			const float t = (float)position;
+			left[i] = (a[0] + (b[0] - a[0]) * t) * (1.0f / 32768.0f);
+			right[i] = (a[1] + (b[1] - a[1]) * t) * (1.0f / 32768.0f);
+			position += step;
+			const uint32_t whole = (uint32_t)position;
+			position -= whole;
+			tail += whole;
+		}
+		// The rest of the six channels silent, as slots are reused (xsdk's docs/GUIDE.md, "Audio").
+		memset(frame + XSDK_AUDIO_CENTER * XSDK_AUDIO_FRAME_SAMPLES, 0,
+			(XSDK_AUDIO_CHANNELS - XSDK_AUDIO_CENTER) * XSDK_AUDIO_FRAME_SAMPLES * sizeof(float));
+		__atomic_store_n(&audio_tail, tail, __ATOMIC_RELEASE);
+		xsdk_audio_queue_frame();
+	}
+}
+
+// Opens the render driver and starts the feeder on its own hardware thread.
+static bool open_audio(double rate_hz)
+{
+	audio_rate_hz = rate_hz;
+	NTSTATUS status = xsdk_audio_open(0);
+	if (!NT_SUCCESS(status)) {
+		xsdk_log_write("swanstation: xsdk_audio_open failed: 0x%08X", (unsigned)status);
+		return false;
+	}
+	status = xsdk_thread_create_on(&audio_thread, AUDIO_STACK_BYTES, audio_feed, NULL, AUDIO_HARDWARE_THREAD);
+	if (!NT_SUCCESS(status)) {
+		xsdk_log_write("swanstation: xsdk_thread_create_on failed for the feeder: 0x%08X", (unsigned)status);
+		xsdk_audio_close();
+		return false;
+	}
+	return true;
+}
+
+// Closes the render driver, which returns the feeder from its wait, and waits for it to end.
+static void close_audio(void)
+{
+	xsdk_audio_close();
+	const NTSTATUS status = NtWaitForSingleObjectEx(audio_thread, USER_MODE, 0, NULL);
+	if (!NT_SUCCESS(status))
+		xsdk_log_write("swanstation: waiting for the feeder failed: 0x%08X", (unsigned)status);
+	NtClose(audio_thread);
+}
+
+// The render driver's counts, the ring's fill and the frames dropped over the report.
+static void log_audio(void)
+{
+	XsdkAudioStats stats;
+	xsdk_audio_stats(&stats);
+	const uint32_t queued =
+		__atomic_load_n(&audio_head, __ATOMIC_ACQUIRE) - __atomic_load_n(&audio_tail, __ATOMIC_ACQUIRE);
+	xsdk_log_write(
+		"swanstation: sound: %u frames played, %u silent (the feeder behind), at least %u queued; %u of the "
+		"core's samples waiting, %u dropped, %u played silent as they ran short",
+		(unsigned)stats.played, (unsigned)stats.silent, (unsigned)stats.fewest_queued, (unsigned)queued,
+		(unsigned)audio_dropped, (unsigned)__atomic_exchange_n(&audio_starved, 0, __ATOMIC_RELAXED));
+	audio_dropped = 0;
 }
 
 static void input_poll(void)
@@ -452,17 +591,67 @@ static void log_profile(uint64_t core_us)
 	upload_ticks = 0;
 }
 
+// The counts a slow frame's log tells apart, as they stood before it.
+typedef struct {
+	uint32_t events;
+	uint32_t event_ticks[XENON_PROFILE_EVENTS];
+	uint32_t gpu_sync;
+	uint32_t spu;
+	uint32_t cdrom_wait;
+} Counts;
+
+static Counts counts_now(void)
+{
+	Counts counts = { .gpu_sync = xenon_profile.gpu_sync_ticks,
+		.spu = xenon_profile.spu_ticks,
+		.cdrom_wait = xenon_profile.cdrom_wait_ticks };
+	for (uint32_t i = 0; i < xenon_profile.event_count; i++) {
+		counts.event_ticks[i] = xenon_profile.event_ticks[i];
+		counts.events += xenon_profile.event_ticks[i];
+	}
+	return counts;
+}
+
+// A frame's ms from a count's two readings, unsigned so a count's wrap doesn't matter.
+static double ticks_ms(uint32_t before, uint32_t after)
+{
+	return (after - before) / (TIME_BASE_HZ / 1000.0);
+}
+
+// Logs a frame the core took over SLOW_FRAME_US for: what it waited on, and the rest.
+static void log_slow_frame(uint64_t took_us, const Counts *before)
+{
+	const Counts after = counts_now();
+	// The event that took longest, by its count's growth; a count new this frame grew from 0.
+	uint32_t longest = 0;
+	for (uint32_t i = 1; i < xenon_profile.event_count; i++) {
+		if (after.event_ticks[i] - before->event_ticks[i] > after.event_ticks[longest] - before->event_ticks[longest])
+			longest = i;
+	}
+	xsdk_log_write(
+		"swanstation: frame %u took %.2f ms: waiting for the CD-ROM read thread %.2f, events %.2f (the longest %s, "
+		"%.2f; the GPU sync in them %.2f), the SPU %.2f",
+		(unsigned)frame_number, took_us / 1000.0, ticks_ms(before->cdrom_wait, after.cdrom_wait),
+		ticks_ms(before->events, after.events), xenon_profile.event_count ? xenon_profile.event_names[longest] : "none",
+		ticks_ms(before->event_ticks[longest], after.event_ticks[longest]), ticks_ms(before->gpu_sync, after.gpu_sync),
+		ticks_ms(before->spu, after.spu));
+}
+
 // Runs the core a frame at a time, each shown as the display's next, until frames= or the title is left; logs the
-// core's time a frame over each REPORT_FRAMES.
+// core's time a frame over each REPORT_FRAMES, and each slow frame.
 static void run(uint32_t width, uint32_t height, double core_fps)
 {
 	uint64_t period_start = now_us();
 	uint64_t core_us = 0;
 	uint64_t longest_core_us = 0;
+	frames_running = true;
 	for (frame_number = 0; config.frames == 0 || frame_number < config.frames; frame_number++) {
+		const Counts before = counts_now();
 		const uint64_t start = now_us();
 		retro_run();
 		const uint64_t took = now_us() - start;
+		if (took > SLOW_FRAME_US)
+			log_slow_frame(took, &before);
 		core_us += took;
 		if (took > longest_core_us)
 			longest_core_us = took;
@@ -482,6 +671,7 @@ static void run(uint32_t width, uint32_t height, double core_fps)
 				(unsigned)(frame_number + 1 - REPORT_FRAMES), (unsigned)frame_number, core_us / 1000.0 / REPORT_FRAMES,
 				longest_core_us / 1000.0, 1000.0 / core_fps, core_fps, REPORT_FRAMES * 1e6 / period_us);
 			log_profile(core_us);
+			log_audio();
 			period_start = now_us();
 			core_us = 0;
 			longest_core_us = 0;
@@ -523,7 +713,10 @@ int main(void)
 				struct retro_system_av_info av;
 				retro_get_system_av_info(&av);
 				xsdk_log_write("swanstation: loaded; %.2f fps, sound at %.0f Hz", av.timing.fps, av.timing.sample_rate);
+				const bool sound = open_audio(av.timing.sample_rate);
 				run(width, height, av.timing.fps);
+				if (sound)
+					close_audio();
 				retro_unload_game();
 				result = 0;
 			} else {
