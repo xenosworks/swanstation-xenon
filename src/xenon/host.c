@@ -1,7 +1,7 @@
 // swanstation: SwanStation on the Xbox 360, its libretro core linked in and driven from here (xsdk's
 // docs/scope/62-swanstation.md). host.txt beside the .xex says what to run, one KEY=VALUE a line:
 //   game=game:\Spyro the Dragon.cue   the disc image, from the title's folder or any other
-//   cpu=CachedInterpreter             the core's CPU mode: Interpreter or CachedInterpreter; no recompiler yet
+//   cpu=CachedInterpreter             the core's CPU mode: Interpreter, CachedInterpreter or Recompiler (no fastmem yet)
 //   frames=1800                       ends the title after that many frames; without it, it runs until Xbox Home
 //   capture=600,1200                  writes the core's frame at those frames as capture_<frame>.ppm beside the .xex
 // The BIOS goes in the title's folder too, where the core looks for one by its contents. Frames are drawn 4:3 in the
