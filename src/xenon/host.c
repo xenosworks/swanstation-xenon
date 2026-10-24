@@ -8,15 +8,19 @@
 //   frames=1800                       ends the title after that many frames of game=; without it, it runs until
 //                                     Xbox Home
 //   capture=600,1200                  writes the core's frame at those frames as capture_<frame>.ppm beside the .xex
-//   check=list                        the picker's listing check (picker_check_list)
+//   report=1                          logs, every 300 frames, the time the core took for a frame, the scope's measure
+//                                     of full speed, where it went, and how the sound kept up; and each frame that
+//                                     ran slow or missed its vblank. Each log line is a write to the drive the game
+//                                     streams from, which can hold a frame up, so play goes without.
+//   check=list                       the picker's listing check (picker_check_list)
 //   check=reload                      starts game= four times over, 300 frames each or frames=, and checks each
 //                                     start ended on a frame that isn't black
 //   check=shots                       opens the pause menu SHOT_FRAME frames into game= and writes it as a PPM, then
 //                                     the picker's (picker_shots)
 // The BIOS goes in the title's folder too, where the core looks for one by its contents. Frames are drawn 4:3 in the
 // middle of a 1280x720 display, pads are the PlayStation's digital pad, and the sound plays from the front left and
-// right speakers. Every 300 frames the log gives the time the core took for a frame, the scope's measure of full
-// speed, and how the sound kept up.
+// right speakers. When a game ends, the log gives its frames, the vblanks that showed a frame again and the gaps in
+// its sound.
 
 #include <libretro.h>
 #include <stdarg.h>
@@ -69,6 +73,8 @@ enum {
 	SLOW_FRAME_US = 20000,
 	// How long both sticks are pressed in together to open the pause menu.
 	PAUSE_HOLD_US = 1000000,
+	// The missed vblanks and gaps in the sound a game's last line names, at most.
+	MARKS = 16,
 	RELOAD_RUNS = 4,
 	RELOAD_FRAMES = 300,
 	SHOT_FRAME = 600,
@@ -98,6 +104,7 @@ typedef struct {
 	uint32_t captures[MAX_CAPTURES];
 	uint32_t capture_count;
 	char check[LINE_BYTES];
+	bool report;
 } Config;
 
 // How a game's run ended: frames= reached or the display failed, or the pause menu's Back to games.
@@ -166,10 +173,25 @@ static bool frame_lit;
 static int16_t audio_ring[AUDIO_RING_FRAMES][2];
 static uint32_t audio_head;
 static uint32_t audio_tail;
-// Frames the core gave while the ring was full, over a report.
+// Frames the core gave while the ring was full, since the game started.
 static uint32_t audio_dropped;
-// Samples the feeder played silent as the ring ran short, over a report: gaps in the sound. The feeder writes it.
+// Samples the feeder played silent as the ring ran short, since the game started: gaps in the sound. The feeder
+// writes it.
 static uint32_t audio_starved;
+// The frames a vblank showed the last frame again at, and the frames a gap in the sound started at, for the line a game
+// ends with: kept here, as a log line during the game is a write to the drive it streams from, which can hold a frame
+// up.
+typedef struct {
+	uint32_t frames[MARKS];
+	uint32_t count;
+} Marks;
+static Marks missed_marks;
+static Marks gap_marks;
+// The counts at the last report, which the next one gives the growth of.
+static uint32_t audio_head_reported;
+static uint32_t audio_tail_reported;
+static uint32_t audio_dropped_reported;
+static uint32_t audio_starved_reported;
 static double audio_rate_hz;
 static HANDLE audio_thread;
 
@@ -213,6 +235,8 @@ static void read_config(void)
 				if (*next != ',')
 					break;
 			}
+		} else if (!strcmp(line, "report")) {
+			config.report = strtoul(value + 1, NULL, 10) != 0;
 		} else if (!strcmp(line, "check")) {
 			snprintf(config.check, sizeof config.check, "%s", value + 1);
 		}
@@ -456,6 +480,12 @@ static bool open_audio(double rate_hz)
 	// The last game's sound left in the ring isn't this one's.
 	audio_head = 0;
 	audio_tail = 0;
+	audio_head_reported = 0;
+	audio_tail_reported = 0;
+	audio_dropped = 0;
+	audio_starved = 0;
+	audio_dropped_reported = 0;
+	audio_starved_reported = 0;
 	NTSTATUS status = xsdk_audio_open(0);
 	if (!NT_SUCCESS(status)) {
 		xsdk_log_write("swanstation: xsdk_audio_open failed: 0x%08X", (unsigned)status);
@@ -485,14 +515,19 @@ static void log_audio(void)
 {
 	XsdkAudioStats stats;
 	xsdk_audio_stats(&stats);
-	const uint32_t queued =
-		__atomic_load_n(&audio_head, __ATOMIC_ACQUIRE) - __atomic_load_n(&audio_tail, __ATOMIC_ACQUIRE);
+	const uint32_t head = __atomic_load_n(&audio_head, __ATOMIC_ACQUIRE);
+	const uint32_t tail = __atomic_load_n(&audio_tail, __ATOMIC_ACQUIRE);
+	const uint32_t starved = __atomic_load_n(&audio_starved, __ATOMIC_RELAXED);
 	xsdk_log_write(
 		"swanstation: sound: %u frames played, %u silent (the feeder behind), at least %u queued; %u of the "
-		"core's samples waiting, %u dropped, %u played silent as they ran short",
-		(unsigned)stats.played, (unsigned)stats.silent, (unsigned)stats.fewest_queued, (unsigned)queued,
-		(unsigned)audio_dropped, (unsigned)__atomic_exchange_n(&audio_starved, 0, __ATOMIC_RELAXED));
-	audio_dropped = 0;
+		"core's samples waiting, %u dropped, %u played silent as they ran short; the core gave %u, the feeder took %u",
+		(unsigned)stats.played, (unsigned)stats.silent, (unsigned)stats.fewest_queued, (unsigned)(head - tail),
+		(unsigned)(audio_dropped - audio_dropped_reported), (unsigned)(starved - audio_starved_reported),
+		(unsigned)(head - audio_head_reported), (unsigned)(tail - audio_tail_reported));
+	audio_head_reported = head;
+	audio_tail_reported = tail;
+	audio_dropped_reported = audio_dropped;
+	audio_starved_reported = starved;
 }
 
 // Reads the pad for the core. Both sticks pressed in together reach it as neither, and held a second they ask for the
@@ -714,11 +749,36 @@ static void log_slow_frame(uint64_t took_us, const Counts *before)
 
 // Runs the core a frame at a time, each shown as the display's next, until frames=, the title is left, or the pause
 // menu goes back to the games; logs the core's time a frame over each REPORT_FRAMES, and each slow frame.
+static void mark(Marks *marks, uint32_t frame)
+{
+	if (marks->count < MARKS)
+		marks->frames[marks->count] = frame;
+	marks->count++;
+}
+
+// The marks' frames as "1088, 2100", with how many more past MARKS, or "none".
+static void format_marks(const Marks *marks, char *text, size_t text_bytes)
+{
+	snprintf(text, text_bytes, "none");
+	size_t used = 0;
+	for (uint32_t i = 0; i < marks->count && i < MARKS && used < text_bytes; i++)
+		used += (size_t)snprintf(text + used, text_bytes - used, "%s%u", i ? ", " : "", (unsigned)marks->frames[i]);
+	if (marks->count > MARKS && used < text_bytes)
+		snprintf(text + used, text_bytes - used, " and %u more", (unsigned)(marks->count - MARKS));
+}
+
 static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *game_path)
 {
 	uint64_t period_start = now_us();
 	uint64_t core_us = 0;
 	uint64_t longest_core_us = 0;
+	XsdkPresentStats present;
+	xsdk_present_stats(&present);
+	uint32_t missed_before = present.missed;
+	uint32_t starved_seen = 0;
+	bool in_gap = false;
+	missed_marks.count = 0;
+	gap_marks.count = 0;
 	frames_running = true;
 	for (frame_number = 0; config.frames == 0 || frame_number < config.frames; frame_number++) {
 		if (picker_shots && frame_number == SHOT_FRAME)
@@ -739,7 +799,7 @@ static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *
 		const uint64_t start = now_us();
 		retro_run();
 		const uint64_t took = now_us() - start;
-		if (took > SLOW_FRAME_US)
+		if (config.report && took > SLOW_FRAME_US)
 			log_slow_frame(took, &before);
 		core_us += took;
 		if (took > longest_core_us)
@@ -752,13 +812,32 @@ static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *
 		}
 		draw(address, width, height);
 		xsdk_present_end();
+		// Each vblank that showed the last frame again, and each gap in the sound, by the frame it came at.
+		const uint32_t missed_seen = present.missed;
+		xsdk_present_stats(&present);
+		if (present.missed != missed_seen) {
+			mark(&missed_marks, frame_number);
+			if (config.report) {
+				xsdk_log_write("swanstation: frame %u: %u vblanks showed the last frame again; the core took %.2f ms",
+					(unsigned)frame_number, (unsigned)(present.missed - missed_seen), took / 1000.0);
+			}
+		}
+		const uint32_t starved = __atomic_load_n(&audio_starved, __ATOMIC_RELAXED);
+		if (starved != starved_seen && !in_gap)
+			mark(&gap_marks, frame_number);
+		in_gap = starved != starved_seen;
+		starved_seen = starved;
+		if (!config.report)
+			continue;
 		if ((frame_number + 1) % REPORT_FRAMES == 0) {
 			const uint64_t period_us = now_us() - period_start;
 			xsdk_log_write(
 				"swanstation: frames %u-%u: the core took %.2f ms a frame on average, %.2f at most, of the "
-				"%.2f its %.2f fps allow; %.2f frames a second shown",
+				"%.2f its %.2f fps allow; %.2f frames a second shown, %u vblanks with no new frame",
 				(unsigned)(frame_number + 1 - REPORT_FRAMES), (unsigned)frame_number, core_us / 1000.0 / REPORT_FRAMES,
-				longest_core_us / 1000.0, 1000.0 / core_fps, core_fps, REPORT_FRAMES * 1e6 / period_us);
+				longest_core_us / 1000.0, 1000.0 / core_fps, core_fps, REPORT_FRAMES * 1e6 / period_us,
+				(unsigned)(present.missed - missed_before));
+			missed_before = present.missed;
 			log_profile(core_us);
 			log_audio();
 			period_start = now_us();
@@ -789,7 +868,20 @@ static bool play_game(uint32_t width, uint32_t height, const char *path, RunEnd 
 	xsdk_log_write("swanstation: loaded; %.2f fps, sound at %.0f Hz", av.timing.fps, av.timing.sample_rate);
 	const bool sound = open_audio(av.timing.sample_rate);
 	held_since_menu = true;
+	XsdkPresentStats before;
+	xsdk_present_stats(&before);
 	*end = run(width, height, av.timing.fps, path);
+	XsdkPresentStats after;
+	xsdk_present_stats(&after);
+	char missed_frames[LINE_BYTES];
+	char gap_frames[LINE_BYTES];
+	format_marks(&missed_marks, missed_frames, sizeof missed_frames);
+	format_marks(&gap_marks, gap_frames, sizeof gap_frames);
+	xsdk_log_write(
+		"swanstation: %u frames run; %u vblanks showed the last frame again, at frames %s; %u samples played silent "
+		"as the sound ran short, from frames %s; %u of the core's dropped",
+		(unsigned)frame_number, (unsigned)(after.missed - before.missed), missed_frames,
+		(unsigned)__atomic_load_n(&audio_starved, __ATOMIC_RELAXED), gap_frames, (unsigned)audio_dropped);
 	if (sound)
 		close_audio();
 	retro_unload_game();
