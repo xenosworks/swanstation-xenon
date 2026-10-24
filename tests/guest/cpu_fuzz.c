@@ -7,9 +7,11 @@
  * handler skips the instruction), COP0 and COP2 transfers, GTE commands, and stores that rewrite the block as it
  * runs. After each run the registers, HI and LO, COP0 and the GTE registers go into RAM at 0x140000 and are folded
  * into a checksum, which RAM[0x100] holds with the count of blocks done, and RAM[0x160000 + 4 * n] holds after block n.
- * The seed picks the sequence. Bits of the mode parameter enable each group (bit 0 R-type ALU, 1 immediates, 2 multiply
+ *
+ * The seed picks the sequence. Bits of the mode parameter enable each group: bit 0 R-type ALU, 1 immediates, 2 multiply
  * and divide, 3 loads, 4 stores, 5 branches, 6 exceptions, 7 COP0 and COP2 transfers, 8 GTE commands, 9 self-modifying
- * stores); bit 31 runs each block once, not once or twice. The third parameter is the number of blocks (500). */
+ * stores, 10 loads and stores at addresses known when compiled. Bit 31 runs each block once, not once or twice. The
+ * third parameter is the number of blocks (500). */
 typedef unsigned int u32;
 typedef int s32;
 
@@ -194,6 +196,7 @@ static u32 imm16(void)
 #define G_COPXFER 0x80u
 #define G_GTE 0x100u
 #define G_SMC 0x200u
+#define G_CONSTANT 0x400u
 #define G_ONE_RUN 0x80000000u
 
 /* Instructions that never raise an exception, safe in a branch delay slot. */
@@ -291,6 +294,80 @@ static u32 gte_command(void)
   return 0x4A000000u | (rng() & 0x01F80000u) | (rng() & 0x400u) | (rng() & 0x7800u) | command;
 }
 
+/* A load or store whose address the recompiler knows when it compiles it, since a lui sets the base just before: the
+ * scratchpad, the BIOS ROM and RAM, each through its segments. Returns the number of words written. */
+static u32 constant_access(volatile u32* out, u32 mode)
+{
+  static const u32 loads[] = {0x20, 0x21, 0x23, 0x24, 0x25};
+  static const u32 stores[] = {0x28, 0x29, 0x2B};
+  const u32 base = reg();
+  u32 high, offset, op, align = 0;
+  int store = 0;
+
+  u32 which = rng() % 5;
+  if ((mode >> 11) & 0x1F)
+  {
+    while (!(((mode >> 11) & 0x1F) & (1u << which)))
+      which = (which + 1) % 5;
+  }
+  switch (which)
+  {
+    case 0:
+      high = (rng() & 1) ? 0x9F80 : 0x1F80; /* not KSEG1: the recompiler reads it as the scratchpad, the interpreter doesn't */
+      offset = 0x101 + rng() % 0xFE; /* the scratchpad window the fuzzer owns */
+      store = rng() & 1;
+      break;
+    case 1:
+      high = ((u32[]){0xBFC0, 0x9FC0, 0x1FC0}[rng() % 3]);
+      offset = rng() & 0x7FFF; /* the BIOS ROM */
+      break;
+    case 2:
+      high = 0x8014; /* the state array, in RAM */
+      offset = rng() & 0x1FF;
+      break;
+    case 3:
+      high = 0xA014;
+      offset = rng() & 0x1FF;
+      break;
+    default:
+      high = 0x8018; /* the data the loads read, stored to as well */
+      offset = rng() & 0x1FFF;
+      store = rng() & 1;
+      break;
+  }
+
+  op = store ? stores[rng() % 3u] : loads[rng() % 5u];
+  if (op == 0x21 || op == 0x25 || op == 0x29)
+    align = 1;
+  else if (op == 0x23 || op == 0x2B)
+    align = 3;
+  offset &= ~align;
+
+  out[0] = 0x3C000000u | (base << 16) | high;
+  out[1] = enc_i(op, base, store ? src() : dst(), offset);
+  return 2;
+}
+
+/* Multiply or divide with both operands set to edge values just before, so the zero divisor, the unrepresentable
+ * quotient and the constant-folded forms all happen; then the results are read. */
+static u32 directed_muldiv(volatile u32* out)
+{
+  const u32 rs = reg();
+  const u32 rt = reg();
+  u32 n = 0, k;
+  const u32 values[2] = {edge(), edge()};
+
+  for (k = 0; k < 2; k++)
+  {
+    out[n++] = 0x3C000000u | ((k ? rt : rs) << 16) | (values[k] >> 16);
+    out[n++] = 0x34000000u | ((k ? rt : rs) << 21) | ((k ? rt : rs) << 16) | (values[k] & 0xFFFFu);
+  }
+  out[n++] = enc_r(rs, rt, 0, 0, 0x18 + (rng() & 3u));
+  out[n++] = enc_r(0, 0, dst(), 0, 0x12);
+  out[n++] = enc_r(0, 0, dst(), 0, 0x10);
+  return n;
+}
+
 /* The words of one block, built in a buffer and copied to CODE at the end; returns their count. */
 static u32 build_block(volatile u32* out, u32 mode)
 {
@@ -300,27 +377,30 @@ static u32 build_block(volatile u32* out, u32 mode)
   while (n < want)
   {
     const u32 pick = rng() % 100u;
-    if (pick < 22 && (mode & G_ALU))
+    if (pick < 20 && (mode & G_ALU))
     {
       out[n++] = alu_r();
     }
-    else if (pick < 40 && (mode & G_IMM))
+    else if (pick < 36 && (mode & G_IMM))
     {
       out[n++] = alu_i();
     }
-    else if (pick < 48 && (mode & G_MULDIV))
+    else if (pick < 44 && (mode & G_MULDIV))
     {
-      out[n++] = muldiv();
+      if (rng() & 1)
+        n += directed_muldiv(out + n);
+      else
+        out[n++] = muldiv();
     }
-    else if (pick < 60 && (mode & G_LOAD))
+    else if (pick < 54 && (mode & G_LOAD))
     {
       out[n++] = mem_op(0, (mode & G_EXC) != 0);
     }
-    else if (pick < 70 && (mode & G_STORE))
+    else if (pick < 63 && (mode & G_STORE))
     {
       out[n++] = mem_op(1, (mode & G_EXC) != 0);
     }
-    else if (pick < 82 && (mode & G_BRANCH) && n + 8 < 60)
+    else if (pick < 74 && (mode & G_BRANCH) && n + 8 < 60)
     {
       /* a branch, its delay slot, and a short run of code it may skip */
       const u32 skip = 1 + rng() % 4u;
@@ -371,7 +451,7 @@ static u32 build_block(volatile u32* out, u32 mode)
         }
       }
     }
-    else if (pick < 88 && (mode & G_EXC))
+    else if (pick < 79 && (mode & G_EXC))
     {
       switch (rng() % 6)
       {
@@ -395,13 +475,17 @@ static u32 build_block(volatile u32* out, u32 mode)
           break;
       }
     }
-    else if (pick < 94 && (mode & G_COPXFER))
+    else if (pick < 84 && (mode & G_CONSTANT))
+    {
+      n += constant_access(out + n, mode);
+    }
+    else if (pick < 89 && (mode & G_COPXFER))
     {
       const u32 r = rng() & 31u;
       switch (rng() % 8)
       {
         case 0:
-          out[n++] = 0x40000000u | (dst() << 16) | ((u32[]){8, 12, 13, 14, 15}[rng() % 5] << 11); /* mfc0 */
+          out[n++] = 0x40000000u | (dst() << 16) | ((u32[]){3, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15}[rng() % 11] << 11); /* mfc0 */
           break;
         case 1:
           out[n++] = 0x48000000u | (dst() << 16) | (r << 11); /* mfc2 */
@@ -430,15 +514,15 @@ static u32 build_block(volatile u32* out, u32 mode)
         }
         break;
         default:
-          out[n++] = 0x40800000u | (src() << 16) | (13u << 11); /* mtc0 CAUSE */
+          out[n++] = 0x40800000u | (src() << 16) | ((u32[]){3, 5, 9, 11, 13}[rng() % 5] << 11); /* mtc0 */
           break;
       }
     }
-    else if (pick < 98 && (mode & G_GTE))
+    else if (pick < 93 && (mode & G_GTE))
     {
       out[n++] = gte_command();
     }
-    else if ((mode & G_SMC) && n + 6 < want + 6)
+    else if ((mode & G_SMC) && pick < 95)
     {
       /* store a new instruction over one ahead in the block: lui $25 code; lui, ori $24 word; sw */
       const u32 victim = n + 5 + rng() % 8u;
