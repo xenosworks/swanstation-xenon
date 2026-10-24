@@ -1,5 +1,6 @@
 #include "gpu.h"
 #include "common/heap_array.h"
+#include "common/little_endian.h"
 #include "common/state_wrapper.h"
 #include "common/string_util.h"
 #include "dma.h"
@@ -439,7 +440,7 @@ void GPU::DMARead(uint32_t* words, uint32_t word_count)
   }
 
   for (uint32_t i = 0; i < word_count; i++)
-    words[i] = ReadGPUREAD();
+    StoreLE32(&words[i], ReadGPUREAD());
 }
 
 void GPU::EndDMAWrite()
@@ -1029,7 +1030,7 @@ uint32_t GPU::ReadGPUREAD()
     // Read with correct wrap-around behavior.
     const uint16_t read_x = (m_vram_transfer.x + m_vram_transfer.col) % VRAM_WIDTH;
     const uint16_t read_y = (m_vram_transfer.y + m_vram_transfer.row) % VRAM_HEIGHT;
-    value |= static_cast<uint32_t>(m_vram_ptr[read_y * VRAM_WIDTH + read_x]) << (i * 16);
+    value |= static_cast<uint32_t>(LoadLE16(&m_vram_ptr[read_y * VRAM_WIDTH + read_x])) << (i * 16);
 
     if (++m_vram_transfer.col == m_vram_transfer.width)
     {
@@ -1277,7 +1278,7 @@ void GPU::ReadVRAM(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {}
 
 void GPU::FillVRAM(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color)
 {
-  const uint16_t color16 = VRAMRGBA8888ToRGBA5551(color);
+  const uint16_t color16 = SwapLE16(VRAMRGBA8888ToRGBA5551(color));
   if ((x + width) <= VRAM_WIDTH && !IsInterlacedRenderingEnabled())
   {
     for (uint32_t yoffs = 0; yoffs < height; yoffs++)
@@ -1351,8 +1352,8 @@ void GPU::UpdateVRAM(uint32_t x, uint32_t y, uint32_t width, uint32_t height, co
       {
         // TODO: Handle unaligned reads...
         uint16_t* pixel_ptr = &dst_row_ptr[(x + col++) % VRAM_WIDTH];
-        if (((*pixel_ptr) & mask_and) == 0)
-          *pixel_ptr = *(src_ptr++) | mask_or;
+        if ((LoadLE16(pixel_ptr) & mask_and) == 0)
+          StoreLE16(pixel_ptr, LoadLE16(src_ptr++) | mask_or);
       }
     }
   }
@@ -1406,10 +1407,10 @@ void GPU::CopyVRAM(uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_
 
       for (int32_t col = static_cast<int32_t>(width - 1); col >= 0; col--)
       {
-        const uint16_t src_pixel = src_row_ptr[(src_x + static_cast<uint32_t>(col)) % VRAM_WIDTH];
+        const uint16_t src_pixel = LoadLE16(&src_row_ptr[(src_x + static_cast<uint32_t>(col)) % VRAM_WIDTH]);
         uint16_t* dst_pixel_ptr = &dst_row_ptr[(dst_x + static_cast<uint32_t>(col)) % VRAM_WIDTH];
-        if ((*dst_pixel_ptr & mask_and) == 0)
-          *dst_pixel_ptr = src_pixel | mask_or;
+        if ((LoadLE16(dst_pixel_ptr) & mask_and) == 0)
+          StoreLE16(dst_pixel_ptr, src_pixel | mask_or);
       }
     }
   }
@@ -1422,10 +1423,10 @@ void GPU::CopyVRAM(uint32_t src_x, uint32_t src_y, uint32_t dst_x, uint32_t dst_
 
       for (uint32_t col = 0; col < width; col++)
       {
-        const uint16_t src_pixel = src_row_ptr[(src_x + col) % VRAM_WIDTH];
+        const uint16_t src_pixel = LoadLE16(&src_row_ptr[(src_x + col) % VRAM_WIDTH]);
         uint16_t* dst_pixel_ptr = &dst_row_ptr[(dst_x + col) % VRAM_WIDTH];
-        if ((*dst_pixel_ptr & mask_and) == 0)
-          *dst_pixel_ptr = src_pixel | mask_or;
+        if ((LoadLE16(dst_pixel_ptr) & mask_and) == 0)
+          StoreLE16(dst_pixel_ptr, src_pixel | mask_or);
       }
     }
   }

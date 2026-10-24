@@ -1,4 +1,5 @@
 #pragma once
+#include "common/little_endian.h"
 #include "gpu_backend.h"
 #include <algorithm>
 #include <array>
@@ -13,8 +14,8 @@ public:
   bool Initialize(bool force_thread) override;
   void Reset(bool clear_vram) override;
 
-  ALWAYS_INLINE_RELEASE uint16_t GetPixel(const uint32_t x, const uint32_t y) const { return m_vram[VRAM_WIDTH * y + x]; }
-  ALWAYS_INLINE_RELEASE void SetPixel(const uint32_t x, const uint32_t y, const uint16_t value) { m_vram[VRAM_WIDTH * y + x] = value; }
+  ALWAYS_INLINE_RELEASE uint16_t GetPixel(const uint32_t x, const uint32_t y) const { return LoadLE16(&m_vram[VRAM_WIDTH * y + x]); }
+  ALWAYS_INLINE_RELEASE void SetPixel(const uint32_t x, const uint32_t y, const uint16_t value) { StoreLE16(&m_vram[VRAM_WIDTH * y + x], value); }
 
   // this is actually (31 * 255) >> 4) == 494, but to simplify addressing we use the next power of two (512)
   static constexpr uint32_t DITHER_LUT_SIZE = 512;
@@ -137,5 +138,6 @@ protected:
                                                     const GPUBackendDrawLineCommand::Vertex* p1);
   DrawLineFunction GetDrawLineFunction(bool shading_enable, bool transparency_enable, bool dithering_enable);
 
+  // Little-endian in memory on every host; read and write it with LoadLE16 and StoreLE16.
   std::array<uint16_t, VRAM_WIDTH * VRAM_HEIGHT> m_vram;
 };

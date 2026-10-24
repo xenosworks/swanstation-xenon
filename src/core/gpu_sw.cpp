@@ -1,5 +1,6 @@
 #include "gpu_sw.h"
 #include "common/align.h"
+#include "common/little_endian.h"
 #include "common/make_array.h"
 #include "common/platform.h"
 #include "host_display.h"
@@ -168,7 +169,7 @@ ALWAYS_INLINE void CopyOutRow16<HostDisplayPixelFormat::RGBA5551, uint16_t>(cons
 #endif
 
   for (; col < width; col++)
-    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGBA5551, uint16_t>(*(src_ptr++));
+    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGBA5551, uint16_t>(LoadLE16(src_ptr++));
 }
 
 template<>
@@ -209,7 +210,7 @@ ALWAYS_INLINE void CopyOutRow16<HostDisplayPixelFormat::RGB565, uint16_t>(const 
 #endif
 
   for (; col < width; col++)
-    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGB565, uint16_t>(*(src_ptr++));
+    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGB565, uint16_t>(LoadLE16(src_ptr++));
 }
 
 template<>
@@ -266,7 +267,7 @@ ALWAYS_INLINE void CopyOutRow16<HostDisplayPixelFormat::RGBA8, uint32_t>(const u
 #endif
 
   for (; col < width; col++)
-    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGBA8, uint32_t>(*(src_ptr++));
+    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::RGBA8, uint32_t>(LoadLE16(src_ptr++));
 }
 
 template<>
@@ -314,7 +315,7 @@ ALWAYS_INLINE void CopyOutRow16<HostDisplayPixelFormat::BGRA8, uint32_t>(const u
 #endif
 
   for (; col < width; col++)
-    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::BGRA8, uint32_t>(*(src_ptr++));
+    *(dst_ptr++) = VRAM16ToOutput<HostDisplayPixelFormat::BGRA8, uint32_t>(LoadLE16(src_ptr++));
 }
 
 template<HostDisplayPixelFormat display_format>
@@ -371,7 +372,7 @@ void GPU_SW::CopyOut15Bit(uint32_t src_x, uint32_t src_y, uint32_t width, uint32
       OutputPixelType* dst_row_ptr = reinterpret_cast<OutputPixelType*>(dst_ptr);
 
       for (uint32_t col = src_x; col < end_x; col++)
-        *(dst_row_ptr++) = VRAM16ToOutput<display_format, OutputPixelType>(src_row_ptr[col % VRAM_WIDTH]);
+        *(dst_row_ptr++) = VRAM16ToOutput<display_format, OutputPixelType>(LoadLE16(&src_row_ptr[col % VRAM_WIDTH]));
 
       src_y += (1 << interleaved_shift);
       dst_ptr += dst_stride;
@@ -446,6 +447,15 @@ void GPU_SW::CopyOut24Bit(uint32_t src_x, uint32_t src_y, uint32_t skip_x, uint3
     {
       if constexpr (display_format == HostDisplayPixelFormat::RGBA8)
       {
+#ifdef MSB_FIRST
+        const uint8_t* src_row_ptr = src_ptr;
+        uint32_t* dst_row_ptr = reinterpret_cast<uint32_t*>(dst_ptr);
+        for (uint32_t col = 0; col < width; col++, src_row_ptr += 3)
+        {
+          *(dst_row_ptr++) = static_cast<uint32_t>(src_row_ptr[0]) | (static_cast<uint32_t>(src_row_ptr[1]) << 8) |
+                             (static_cast<uint32_t>(src_row_ptr[2]) << 16) | 0xFF000000u;
+        }
+#else
         const uint8_t* src_row_ptr = src_ptr;
         uint8_t* dst_row_ptr = reinterpret_cast<uint8_t*>(dst_ptr);
         for (uint32_t col = 0; col < width; col++)
@@ -455,9 +465,19 @@ void GPU_SW::CopyOut24Bit(uint32_t src_x, uint32_t src_y, uint32_t skip_x, uint3
           *(dst_row_ptr++) = *(src_row_ptr++);
           *(dst_row_ptr++) = 0xFF;
         }
+#endif
       }
       else if constexpr (display_format == HostDisplayPixelFormat::BGRA8)
       {
+#ifdef MSB_FIRST
+        const uint8_t* src_row_ptr = src_ptr;
+        uint32_t* dst_row_ptr = reinterpret_cast<uint32_t*>(dst_ptr);
+        for (uint32_t col = 0; col < width; col++, src_row_ptr += 3)
+        {
+          *(dst_row_ptr++) = static_cast<uint32_t>(src_row_ptr[2]) | (static_cast<uint32_t>(src_row_ptr[1]) << 8) |
+                             (static_cast<uint32_t>(src_row_ptr[0]) << 16) | 0xFF000000u;
+        }
+#else
         const uint8_t* src_row_ptr = src_ptr;
         uint8_t* dst_row_ptr = reinterpret_cast<uint8_t*>(dst_ptr);
         for (uint32_t col = 0; col < width; col++)
@@ -468,6 +488,7 @@ void GPU_SW::CopyOut24Bit(uint32_t src_x, uint32_t src_y, uint32_t skip_x, uint3
           *(dst_row_ptr++) = 0xFF;
           src_row_ptr += 3;
         }
+#endif
       }
       else if constexpr (display_format == HostDisplayPixelFormat::RGB565)
       {
@@ -506,8 +527,8 @@ void GPU_SW::CopyOut24Bit(uint32_t src_x, uint32_t src_y, uint32_t skip_x, uint3
       for (uint32_t col = 0; col < width; col++)
       {
         const uint32_t offset = (src_x + (((skip_x + col) * 3) / 2));
-        const uint16_t s0 = src_row_ptr[offset % VRAM_WIDTH];
-        const uint16_t s1 = src_row_ptr[(offset + 1) % VRAM_WIDTH];
+        const uint16_t s0 = LoadLE16(&src_row_ptr[offset % VRAM_WIDTH]);
+        const uint16_t s1 = LoadLE16(&src_row_ptr[(offset + 1) % VRAM_WIDTH]);
         const uint8_t shift = static_cast<uint8_t>(col & 1u) * 8;
         const uint32_t rgb = (((static_cast<uint32_t>(s1) << 16) | static_cast<uint32_t>(s0)) >> shift);
 

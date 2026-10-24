@@ -1,3 +1,4 @@
+#include "common/little_endian.h"
 #include "common/string_util.h"
 #include "cpu_core.h"
 #include "gpu.h"
@@ -490,6 +491,12 @@ void GPU::FinishVRAMWrite()
     SynchronizeCRTC();
 
   FlushRender();
+
+#ifdef MSB_FIRST
+  // UpdateVRAM takes halfwords as they sit in VRAM, little-endian; the buffer's words are values.
+  for (uint32_t& word : m_blit_buffer)
+    word = SwapLE32(word);
+#endif
 
   if (m_blit_remaining_words == 0)
   {

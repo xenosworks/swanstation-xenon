@@ -320,7 +320,11 @@ struct GPUBackendDrawPolygonCommand : public GPUBackendDrawCommand
     {
       struct
       {
+#ifdef MSB_FIRST
+        uint8_t a, b, g, r;
+#else
         uint8_t r, g, b, a;
+#endif
       };
       uint32_t color;
     };
@@ -328,7 +332,11 @@ struct GPUBackendDrawPolygonCommand : public GPUBackendDrawCommand
     {
       struct
       {
+#ifdef MSB_FIRST
+        uint8_t v, u;
+#else
         uint8_t u, v;
+#endif
       };
       uint16_t texcoord;
     };
@@ -356,7 +364,11 @@ struct GPUBackendDrawLineCommand : public GPUBackendDrawCommand
     {
       struct
       {
+#ifdef MSB_FIRST
+        uint8_t a, b, g, r;
+#else
         uint8_t r, g, b, a;
+#endif
       };
       uint32_t color;
     };

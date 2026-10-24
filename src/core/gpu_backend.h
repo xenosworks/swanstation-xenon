@@ -39,6 +39,7 @@ protected:
 
   void HandleCommand(const GPUBackendCommand* cmd);
 
+  // VRAM is little-endian in memory on every host; read and write it with LoadLE16 and StoreLE16.
   uint16_t* m_vram_ptr = nullptr;
 
   Common::Rectangle<uint32_t> m_drawing_area{};
