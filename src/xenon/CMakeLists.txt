@@ -23,4 +23,4 @@ set_source_files_properties(fonts.S PROPERTIES COMPILE_OPTIONS "-Wa,-I${CMAKE_CU
   OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/fonts/ArchivoNarrow-Regular.ttf;${CMAKE_CURRENT_SOURCE_DIR}/fonts/ArchivoNarrow-Medium.ttf")
 # Writes swanstation_shaders.h, with frame_vert and frame_frag.
 xsdk_add_shaders(swanstation frame.vert frame.frag)
-xsdk_add_xex(swanstation TITLE_ID 0x58535353 NAME "SwanStation")
+xsdk_add_xex(swanstation TITLE_ID 0x58535353 NAME "SwanStation" VERSION 0.1.0.0)
