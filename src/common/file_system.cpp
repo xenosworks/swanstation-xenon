@@ -37,6 +37,8 @@
 #include <file/file_path.h>
 #include <streams/file_stream.h>
 
+// Linked into RetroArch (xsdk:docs/scope/65-retroarch.md), the frontend's libretro-common has these already.
+#ifndef STATIC_LINKING
 extern "C" int rfeof(RFILE* stream)
 {
    return filestream_eof(stream);
@@ -155,6 +157,7 @@ extern "C" int64_t rfwrite(void const* buffer,
 
    return (filestream_write(stream, buffer, elem_size * elem_count) / elem_size);
 }
+#endif
 
 namespace FileSystem {
 
@@ -605,7 +608,12 @@ const uint8_t* GetMappedView(RFILE* fp, int64_t* size)
 {
    if (!fp)
       return nullptr;
+#ifdef STATIC_LINKING
+   // RetroArch 1.22.2's libretro-common has no mappings; the CD image code seeks and reads instead.
+   return nullptr;
+#else
    return filestream_get_mapped_ptr(fp, size);
+#endif
 }
 
 RFILE* OpenRFile(const char *filename, const char *mode)

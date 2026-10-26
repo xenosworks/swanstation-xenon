@@ -232,7 +232,10 @@ RETRO_API void retro_set_environment(retro_environment_t f)
   // mappings unreachable.  No-op when the frontend has no VFS.
   log_cb.log = NULL;
   g_retro_environment_callback(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log_cb);
+#ifndef STATIC_LINKING
+  // Linked into RetroArch, files go through the frontend's own libretro-common.
   vfs_hybrid_init(g_retro_environment_callback, log_cb.log);
+#endif
 }
 
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t f)
