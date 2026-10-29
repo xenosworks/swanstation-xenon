@@ -18,8 +18,9 @@
 //   check=shots                       opens the pause menu SHOT_FRAME frames into game= and writes it as a PPM, then
 //                                     the picker's (picker_shots)
 // The BIOS goes in the title's folder too, where the core looks for one by its contents. Frames are drawn 4:3 in the
-// middle of a 1280x720 display, pads are the PlayStation's digital pad, and the sound plays from the front left and
-// right speakers. When a game ends, the log gives its frames, the vblanks that showed a frame again and the gaps in
+// middle of a 1280x720 display, the pad is a DualShock (both sticks and rumble; analog or digital as the picker's Y or
+// the pause menu's Pad row last set, kept in settings.txt, and LB + RB + Back, the core's default combo, switches it in
+// a game), memory card 1 is a file per game in saves, and the sound plays from the front left and right speakers. When a game ends, the log gives its frames, the vblanks that showed a frame again and the gaps in
 // its sound.
 
 #include <libretro.h>
@@ -29,7 +30,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "common/xenon_profile.h"
@@ -59,6 +62,9 @@ enum {
 	TIME_BASE_HZ = 49875000,
 	// A trigger past a quarter of its travel presses L2 or R2.
 	TRIGGER_PRESSED = 64,
+	// A stick within a quarter of its travel of the middle reads as centred, so a worn one doesn't drift.
+	STICK_DEAD_ZONE = 8192,
+	STICK_MAX = 32767,
 	CORNERS = 4,
 	BLACK = 0xFF000000,
 	// The feeder's hardware thread: the third core's second, beside the CD-ROM read thread, which mostly waits.
@@ -84,8 +90,12 @@ enum {
 // the PlayStation's 59.82, too little to hear.
 static const double AUDIO_RATE_LEAN = 0.005;
 
-// The core's files, the BIOS and memory cards, and the captures: the title's folder.
+// The core's DualShock (libretro/libretro_host_interface.cpp).
+#define RETRO_DEVICE_PS_DUALSHOCK RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)
+
+// The core's files, the BIOS and the captures: the title's folder; its memory cards, one a game by its code, in saves.
 static const char DATA_DIRECTORY[] = "game:";
+static const char SAVE_DIRECTORY[] = "game:\\saves";
 static const char CONFIG_NAME[] = "host.txt";
 // The PlayStation's 4:3 across the middle of 16:9: 960 of 1280 columns.
 static const float FRAME_HALF_WIDTH = 0.75f;
@@ -161,6 +171,13 @@ static bool frames_running;
 static uint32_t upload_ticks;
 // The joypad's buttons as a bitmask of libretro's ids, read once a frame.
 static int16_t joypad;
+// The sticks, left then right, X then Y in libretro's sense (Y grows downwards), read with the buttons.
+static int16_t sticks[2][2];
+// Whether an option core_option answers changed since the core last asked: the pause menu's Pad row.
+static bool options_changed;
+// The DualShock's motors as the core last set them, large then small, and what the pad was last told.
+static uint16_t rumble[2];
+static uint16_t rumble_sent[2];
 // When both sticks were first pressed in together, 0 while they aren't; and whether they've been held long enough.
 static uint64_t pause_held_since;
 static bool pause_requested;
@@ -270,7 +287,46 @@ static const char *core_option(const char *key)
 		return "Disabled";
 	if (!strcmp(key, "swanstation_GPU_UseThread") || !strcmp(key, "swanstation_CDROM_ReadThread"))
 		return "true";
+	// The pad's mode the player chose in the picker or the pause menu; LB + RB + Back still switches it in a game.
+	if (!strcmp(key, "swanstation_Controller1_AnalogOnReset"))
+		return picker_analog ? "true" : "false";
+	// Cards in files the core writes itself, 5 s after a game saves to one: the default, Libretro, leaves them to a
+	// frontend's .srm, which this host doesn't write. By the game's code, which fits FATX's 42-character names.
+	if (!strcmp(key, "swanstation_MemoryCards_Card1Type"))
+		return "PerGame";
 	return NULL;
+}
+
+// The core's DualShock motors, sent to the pad after each of its frames (send_rumble).
+static bool set_rumble(unsigned port, enum retro_rumble_effect effect, uint16_t strength)
+{
+	if (port != 0 || effect > RETRO_RUMBLE_WEAK)
+		return false;
+	rumble[effect] = strength;
+	return true;
+}
+
+// Tells the pad's motors the core's, left (the large) for strong and right for weak, when they change.
+static void send_rumble(void)
+{
+	if (rumble[RETRO_RUMBLE_STRONG] == rumble_sent[0] && rumble[RETRO_RUMBLE_WEAK] == rumble_sent[1])
+		return;
+	const INPUT_VIBRATION vibration = {
+		.left_motor_speed = rumble[RETRO_RUMBLE_STRONG],
+		.right_motor_speed = rumble[RETRO_RUMBLE_WEAK],
+	};
+	if (XamInputSetState(0, 0, &vibration) == ERROR_SUCCESS) {
+		rumble_sent[0] = vibration.left_motor_speed;
+		rumble_sent[1] = vibration.right_motor_speed;
+	}
+}
+
+// Stops the motors, for the menus and between games; the core sets them again on its next frame.
+static void stop_rumble(void)
+{
+	rumble[RETRO_RUMBLE_STRONG] = 0;
+	rumble[RETRO_RUMBLE_WEAK] = 0;
+	send_rumble();
 }
 
 static bool environment(unsigned command, void *data)
@@ -280,8 +336,10 @@ static bool environment(unsigned command, void *data)
 		((struct retro_log_callback *)data)->log = core_log;
 		return true;
 	case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
-	case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
 		*(const char **)data = DATA_DIRECTORY;
+		return true;
+	case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
+		*(const char **)data = SAVE_DIRECTORY;
 		return true;
 	case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
 		const enum retro_pixel_format format = *(const enum retro_pixel_format *)data;
@@ -296,10 +354,18 @@ static bool environment(unsigned command, void *data)
 		return variable->value != NULL;
 	}
 	case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
-		*(bool *)data = false;
+		*(bool *)data = options_changed;
+		options_changed = false;
 		return true;
 	case RETRO_ENVIRONMENT_GET_CAN_DUPE:
 		*(bool *)data = true;
+		return true;
+	case RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE:
+		((struct retro_rumble_interface *)data)->set_rumble_state = set_rumble;
+		return true;
+	// The core's on-screen messages, such as the pad's mode switching and a memory card saved: logged.
+	case RETRO_ENVIRONMENT_SET_MESSAGE:
+		xsdk_log_write("core says: %s", ((const struct retro_message *)data)->msg);
 		return true;
 	case RETRO_ENVIRONMENT_GET_INPUT_BITMASKS:
 	case RETRO_ENVIRONMENT_SET_VARIABLES:
@@ -530,12 +596,31 @@ static void log_audio(void)
 	audio_starved_reported = starved;
 }
 
+// A stick for the core: centred inside the dead zone, which is cut out round the middle so the travel past it still
+// spans the whole range, and Y turned to grow downwards as libretro's does.
+static void read_stick(int16_t x, int16_t y, int16_t out[2])
+{
+	// As floats: the enum also holds BLACK, 0xFF000000, which makes its constants unsigned under C23, and
+	// -STICK_MAX huge.
+	const float max = STICK_MAX;
+	const float dead_zone = STICK_DEAD_ZONE;
+	const float length = sqrtf((float)x * x + (float)y * y);
+	out[0] = 0;
+	out[1] = 0;
+	if (length <= dead_zone)
+		return;
+	const float scale = (fminf(length, max) - dead_zone) / (max - dead_zone) * max / length;
+	out[0] = (int16_t)fmaxf(fminf(x * scale, max), -max);
+	out[1] = (int16_t)fmaxf(fminf(-y * scale, max), -max);
+}
+
 // Reads the pad for the core. Both sticks pressed in together reach it as neither, and held a second they ask for the
 // pause menu. Not Back and Start: Aurora's plugin takes a screenshot on those.
 static void input_poll(void)
 {
 	INPUT_STATE input = { 0 };
 	joypad = 0;
+	memset(sticks, 0, sizeof sticks);
 	if (XamInputGetState(0, 0, &input) != ERROR_SUCCESS)
 		return;
 	uint16_t buttons = input.gamepad.buttons;
@@ -562,12 +647,17 @@ static void input_poll(void)
 		joypad |= 1 << RETRO_DEVICE_ID_JOYPAD_L2;
 	if (input.gamepad.right_trigger >= TRIGGER_PRESSED)
 		joypad |= 1 << RETRO_DEVICE_ID_JOYPAD_R2;
+	read_stick(input.gamepad.thumb_lx, input.gamepad.thumb_ly, sticks[RETRO_DEVICE_INDEX_ANALOG_LEFT]);
+	read_stick(input.gamepad.thumb_rx, input.gamepad.thumb_ry, sticks[RETRO_DEVICE_INDEX_ANALOG_RIGHT]);
 }
 
 static int16_t input_state(unsigned port, unsigned device, unsigned index, unsigned id)
 {
-	(void)index;
-	if (port != 0 || device != RETRO_DEVICE_JOYPAD)
+	if (port != 0)
+		return 0;
+	if (device == RETRO_DEVICE_ANALOG)
+		return index <= RETRO_DEVICE_INDEX_ANALOG_RIGHT && id <= RETRO_DEVICE_ID_ANALOG_Y ? sticks[index][id] : 0;
+	if (device != RETRO_DEVICE_JOYPAD)
 		return 0;
 	if (id == RETRO_DEVICE_ID_JOYPAD_MASK)
 		return joypad;
@@ -795,7 +885,11 @@ static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *
 		if (picker_shots && frame_number == SHOT_FRAME)
 			pause_requested = true;
 		if (pause_requested) {
+			stop_rumble();
+			const bool analog_before = picker_analog;
 			const PauseChoice choice = picker_pause(width, height, game_path, draw_frame);
+			// The core reads the options again on its next frame and switches the pad (core/analog_controller.cpp).
+			options_changed |= picker_analog != analog_before;
 			// The menu's draws read the frame's texture too, and the next upload waits for them.
 			screen.fence = xsdk_gpu_fence();
 			pause_requested = false;
@@ -810,6 +904,7 @@ static RunEnd run(uint32_t width, uint32_t height, double core_fps, const char *
 		const uint64_t start = now_us();
 		retro_run();
 		const uint64_t took = now_us() - start;
+		send_rumble();
 		if (config.report && took > SLOW_FRAME_US)
 			log_slow_frame(took, &before);
 		core_us += took;
@@ -882,6 +977,7 @@ static bool play_game(uint32_t width, uint32_t height, const char *path, RunEnd 
 	XsdkPresentStats before;
 	xsdk_present_stats(&before);
 	*end = run(width, height, av.timing.fps, path);
+	stop_rumble();
 	XsdkPresentStats after;
 	xsdk_present_stats(&after);
 	char missed_frames[LINE_BYTES];
@@ -945,6 +1041,8 @@ static bool check_reload(uint32_t width, uint32_t height)
 int main(void)
 {
 	read_config();
+	// The core opens its cards there and doesn't make the folder (core/memory_card.cpp); it may already exist.
+	mkdir(SAVE_DIRECTORY, 0777);
 	xsdk_log_write("swanstation: %s, the %s CPU, on hardware thread %u", config.game[0] ? config.game : "the picker",
 		config.cpu, (unsigned)xsdk_thread_hardware_thread());
 	const NTSTATUS splash = xsdk_splash_show(SPLASH_MS);
@@ -972,6 +1070,8 @@ int main(void)
 			retro_set_input_poll(input_poll);
 			retro_set_input_state(input_state);
 			retro_init();
+			// Before any game loads, so its boot makes the DualShock with its settings and resets it into analog.
+			retro_set_controller_port_device(0, RETRO_DEVICE_PS_DUALSHOCK);
 			picker_shots = !strcmp(config.check, "shots");
 			if (!strcmp(config.check, "list")) {
 				result = picker_check_list() ? 0 : 1;

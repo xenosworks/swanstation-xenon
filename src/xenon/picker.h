@@ -19,6 +19,9 @@ typedef enum {
 // host.txt's check=shots: the pause menu and then the picker each write their frame, as shot_pause.ppm and
 // shot_picker.ppm beside the .xex, and close, the pause menu as Back to games and the picker as quitting.
 extern bool picker_shots;
+// The pad's mode, analog (true) or digital: games start in it, the picker's Y and the pause menu's Pad row change it,
+// and settings.txt beside the .xex keeps it.
+extern bool picker_analog;
 
 // After xsdk_present_open(); picker_close() before xsdk_present_close().
 bool picker_open(void);

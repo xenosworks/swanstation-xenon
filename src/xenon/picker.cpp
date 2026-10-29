@@ -123,7 +123,14 @@ const char MIDDLE_DOT[] = "  \xC2\xB7  ";
 // The disc image formats CDImage::Open takes (common/cd_image.cpp).
 const char *const DISC_EXTENSIONS[] = { ".cue", ".chd", ".m3u", ".pbp", ".iso", ".ecm", ".mds", ".bin", ".img" };
 
-const char *const PAUSE_ITEMS[] = { "Resume", "Reset", "Back to games" };
+// The pause menu's rows and what each chooses; the Pad row instead shows the pad's mode and changes it in place.
+const char *const PAUSE_ITEMS[] = { "Resume", "Reset", "Pad", "Back to games" };
+const PauseChoice PAUSE_ROW_CHOICES[] = { PAUSE_RESUME, PAUSE_RESET, PAUSE_RESUME, PAUSE_TO_GAMES };
+const int PAUSE_PAD_ROW = 2;
+
+// picker_analog's file and line.
+const char SETTINGS_PATH[] = "game:\\settings.txt";
+const char ANALOG_KEY[] = "analog=";
 
 struct Game {
 	// The file's name without its extension, as the list shows it.
@@ -157,6 +164,7 @@ Source sources[] = {
 } // namespace
 
 bool picker_shots;
+bool picker_analog = true;
 
 namespace
 {
@@ -166,6 +174,37 @@ ImFont *medium;
 size_t current;
 // The game started last, which the list selects again on its return.
 std::string last_path;
+
+// Reads picker_analog from settings.txt; without the file or its line it stays analog.
+void load_settings()
+{
+	FILE *const file = fopen(SETTINGS_PATH, "r");
+	if (!file)
+		return;
+	char line[LINE_BYTES];
+	while (fgets(line, sizeof line, file)) {
+		if (!strncmp(line, ANALOG_KEY, strlen(ANALOG_KEY)))
+			picker_analog = line[strlen(ANALOG_KEY)] != '0';
+	}
+	fclose(file);
+}
+
+void save_settings()
+{
+	FILE *const file = fopen(SETTINGS_PATH, "w");
+	if (!file) {
+		xsdk_log_write("picker: can't write %s", SETTINGS_PATH);
+		return;
+	}
+	fprintf(file, "%s%d\n", ANALOG_KEY, picker_analog ? 1 : 0);
+	fclose(file);
+}
+
+void toggle_analog()
+{
+	picker_analog = !picker_analog;
+	save_settings();
+}
 
 uint64_t now_us()
 {
@@ -578,6 +617,7 @@ void draw_picker(ImDrawList *draw, ImVec2 display, Source &source, size_t source
 		y += message_height;
 	}
 	std::string hints = count ? "A  play      B  quit" : "B  quit";
+	hints += picker_analog ? "      Y  pad: analog" : "      Y  pad: digital";
 	if (source_count > 1)
 		hints += "      LB RB  drive";
 	if (count > source.fit)
@@ -626,8 +666,9 @@ void draw_pause(ImDrawList *draw, ImVec2 display, const std::string &game_name, 
 		snprintf(number, sizeof number, "%02d", i + 1);
 		const float text_y = y + (row - row_size) / 2.0f;
 		draw_text(draw, regular, row_size, ImVec2(x, text_y), chosen ? PAPER : NUMBER, number);
-		draw_text(
-			draw, chosen ? medium : regular, row_size, ImVec2(title_x, text_y), chosen ? PAPER : INK, PAUSE_ITEMS[i]);
+		const char *const item =
+			i == PAUSE_PAD_ROW ? (picker_analog ? "Pad: analog" : "Pad: digital") : PAUSE_ITEMS[i];
+		draw_text(draw, chosen ? medium : regular, row_size, ImVec2(title_x, text_y), chosen ? PAPER : INK, item);
 		y += row;
 	}
 	draw_text(
@@ -743,6 +784,7 @@ bool picker_open(void)
 		ImGui::DestroyContext();
 		return false;
 	}
+	load_settings();
 	return true;
 }
 
@@ -800,6 +842,8 @@ bool picker_choose(uint32_t width, uint32_t height, const char *failed_path, cha
 			ImGui::EndFrame();
 			return false;
 		}
+		if (pressed(ImGuiKey_GamepadFaceUp))
+			toggle_analog();
 		finish_serial(false);
 		Game *const game = shown.games.empty() ? nullptr : &shown.games[shown.selected];
 		rest_frames = game == rested_on ? rest_frames + 1 : 0;
@@ -834,8 +878,10 @@ PauseChoice picker_pause(uint32_t width, uint32_t height, const char *game_path,
 			selected = std::min(selected + 1, (int)IM_ARRAYSIZE(PAUSE_ITEMS) - 1);
 		if (pressed(ImGuiKey_GamepadDpadUp, true) || pressed(ImGuiKey_GamepadLStickUp, true))
 			selected = std::max(selected - 1, 0);
-		if (pressed(ImGuiKey_GamepadFaceDown) || pressed(ImGuiKey_GamepadFaceRight)) {
-			const PauseChoice choice = pressed(ImGuiKey_GamepadFaceDown) ? (PauseChoice)selected : PAUSE_RESUME;
+		if (pressed(ImGuiKey_GamepadFaceDown) && selected == PAUSE_PAD_ROW) {
+			toggle_analog();
+		} else if (pressed(ImGuiKey_GamepadFaceDown) || pressed(ImGuiKey_GamepadFaceRight)) {
+			const PauseChoice choice = pressed(ImGuiKey_GamepadFaceDown) ? PAUSE_ROW_CHOICES[selected] : PAUSE_RESUME;
 			ImGui::EndFrame();
 			return choice;
 		}
