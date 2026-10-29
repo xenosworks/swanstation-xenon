@@ -25,7 +25,7 @@ void AnalogController::Reset()
   m_command_step = 0;
   m_rx_buffer.fill(0x00);
   m_tx_buffer.fill(0x00);
-  m_analog_mode = false;
+  m_analog_mode = m_analog_on_reset;
   m_configuration_mode = false;
   m_motor_state.fill(0);
 
@@ -667,6 +667,17 @@ void AnalogController::LoadSettings(const char* section)
 {
   Controller::LoadSettings(section);
   m_force_analog = g_host_interface->GetBoolSettingValue(section, "ForceAnalog", false);
+  const bool analog_on_reset = g_host_interface->GetBoolSettingValue(section, "AnalogOnReset", false);
+  if (m_settings_loaded && analog_on_reset != m_analog_on_reset && analog_on_reset != m_analog_mode)
+  {
+    // As the Analog button does, so a game's lock still holds.
+    if (m_command == Command::Idle)
+      ProcessAnalogModeToggle();
+    else
+      m_analog_toggle_queued = true;
+  }
+  m_analog_on_reset = analog_on_reset;
+  m_settings_loaded = true;
   m_analog_dpad_in_digital_mode = g_host_interface->GetBoolSettingValue(section, "AnalogDPadInDigitalMode", false);
   m_axis_scale =
     std::clamp(std::abs(g_host_interface->GetFloatSettingValue(section, "AxisScale", 1.33f)), 0.01f, 1.50f);

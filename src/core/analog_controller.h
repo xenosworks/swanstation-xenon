@@ -109,6 +109,10 @@ private:
 
   bool m_force_analog = false;
   bool m_old_force_analog = false;
+  // Starts in analog mode at power-on and reset, as if the Analog button were pressed, yet still toggles; changed
+  // later, it switches the mode then too.
+  bool m_analog_on_reset = false;
+  bool m_settings_loaded = false;
   bool m_analog_dpad_in_digital_mode = false;
   float m_axis_scale = 1.00f;
   uint8_t m_rumble_bias = 8;
