@@ -820,6 +820,15 @@ bool HostInterface::retro_load_game(const struct retro_game_info* game)
 
   g_retro_environment_callback(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
+  // A port's device set between retro_init and here reaches the boot, whose reset sets the controller up from its
+  // settings; set on the first frame instead, a DualShock would start in digital mode whatever AnalogOnReset says.
+  if (controller_dirty)
+  {
+    controller_dirty = false;
+    LoadSettings();
+    FixIncompatibleSettings(true);
+  }
+
   if (!BootSystem(std::move(bp)))
     return false;
 
