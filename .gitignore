@@ -56,3 +56,6 @@ __pycache__/
 
 # the console's test folders, which tests/xenon/prepare.sh writes
 /build-xenon-tests/
+
+# Lokalne zależności i pliki wynikowe testów interfejsu nie należą do źródeł.
+/work/

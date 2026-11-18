@@ -3,6 +3,7 @@
 // inverted. Drawn by hand on Dear ImGui's draw lists, not with its widgets; the controller comes through ImGui's keys.
 
 #include "picker.h"
+#include "cover_art.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -131,6 +132,10 @@ const int PAUSE_PAD_ROW = 2;
 // picker_analog's file and line.
 const char SETTINGS_PATH[] = "game:\\settings.txt";
 const char ANALOG_KEY[] = "analog=";
+const char GAMES_ROOT_KEY[] = "games_root=";
+std::string games_root = "game:\\games";
+CoverArt::Settings cover_settings;
+std::vector<std::string> unknown_settings;
 
 struct Game {
 	// The file's name without its extension, as the list shows it.
@@ -175,29 +180,92 @@ size_t current;
 // The game started last, which the list selects again on its return.
 std::string last_path;
 
-// Reads picker_analog from settings.txt; without the file or its line it stays analog.
+bool read_boolean(const std::string &line, const char *key, bool &value)
+{
+	const size_t length = strlen(key);
+	if (line.compare(0, length, key) != 0)
+		return false;
+	const std::string setting = line.substr(length);
+	if (setting == "1" || setting == "true")
+		value = true;
+	else if (setting == "0" || setting == "false")
+		value = false;
+	else
+		xsdk_log_write("picker: nieprawidlowa wartosc ustawienia %s", key);
+	return true;
+}
+
+bool valid_games_root(const std::string &path)
+{
+	for (unsigned char character : path) {
+		if (character < 32)
+			return false;
+	}
+	for (const char *drive : { "game:", "hdd:", "usb:", "usb0:", "usb1:", "usb2:" }) {
+		const size_t length = strlen(drive);
+		if (path.size() > length && !strncasecmp(path.c_str(), drive, length) &&
+			(path[length] == '\\' || path[length] == '/'))
+			return true;
+	}
+	return false;
+}
+
+// Zachowujemy obce wpisy, aby zmiana trybu pada nie usuwała cudzych ustawień.
 void load_settings()
 {
+	unknown_settings.clear();
 	FILE *const file = fopen(SETTINGS_PATH, "r");
 	if (!file)
 		return;
 	char line[LINE_BYTES];
 	while (fgets(line, sizeof line, file)) {
-		if (!strncmp(line, ANALOG_KEY, strlen(ANALOG_KEY)))
-			picker_analog = line[strlen(ANALOG_KEY)] != '0';
+		std::string value(line);
+		while (!value.empty() && (value.back() == '\r' || value.back() == '\n'))
+			value.pop_back();
+		if (read_boolean(value, ANALOG_KEY, picker_analog) ||
+			read_boolean(value, "cover_enabled=", cover_settings.enabled) ||
+			read_boolean(value, "cover_auto_download=", cover_settings.auto_download) ||
+			read_boolean(value, "cover_download_on_startup=", cover_settings.download_on_startup) ||
+			read_boolean(value, "cover_fallback_source=", cover_settings.fallback_source))
+			continue;
+		if (value.compare(0, strlen(GAMES_ROOT_KEY), GAMES_ROOT_KEY) == 0) {
+			std::string root = value.substr(strlen(GAMES_ROOT_KEY));
+			// Aurora pokazuje Hdd1:, natomiast przenośna warstwa XSDK nazywa ten dysk hdd:.
+			if (!strncasecmp(root.c_str(), "hdd1:", 5))
+				root.replace(0, 5, "hdd:");
+			if (valid_games_root(root))
+				games_root = root;
+			else
+				xsdk_log_write("picker: odrzucono nieprawidlowa sciezke games_root");
+			continue;
+		}
+		unknown_settings.emplace_back(line);
 	}
+	if (ferror(file))
+		xsdk_log_write("picker: blad odczytu ustawien");
 	fclose(file);
 }
 
 void save_settings()
 {
-	FILE *const file = fopen(SETTINGS_PATH, "w");
+	const char temporary[] = "game:\\settings.tmp";
+	FILE *const file = fopen(temporary, "w");
 	if (!file) {
 		xsdk_log_write("picker: can't write %s", SETTINGS_PATH);
 		return;
 	}
-	fprintf(file, "%s%d\n", ANALOG_KEY, picker_analog ? 1 : 0);
-	fclose(file);
+	bool complete = true;
+	for (const std::string &line : unknown_settings)
+		complete = fwrite(line.data(), 1, line.size(), file) == line.size() && complete;
+	if (!unknown_settings.empty() && !unknown_settings.back().empty() && unknown_settings.back().back() != '\n')
+		complete = fputc('\n', file) != EOF && complete;
+	complete = fprintf(file, "%s%d\n%s%s\ncover_enabled=%d\ncover_auto_download=%d\n"
+		"cover_download_on_startup=%d\ncover_fallback_source=%d\n", ANALOG_KEY, picker_analog ? 1 : 0,
+		GAMES_ROOT_KEY, games_root.c_str(), cover_settings.enabled ? 1 : 0, cover_settings.auto_download ? 1 : 0,
+		cover_settings.download_on_startup ? 1 : 0, cover_settings.fallback_source ? 1 : 0) >= 0 && complete;
+	const bool closed = fclose(file) == 0;
+	if (!complete || !closed || rename(temporary, SETTINGS_PATH) != 0)
+		xsdk_log_write("picker: blad zapisu ustawien; zachowano poprzedni plik");
 }
 
 void toggle_analog()
@@ -529,9 +597,11 @@ void draw_picker(ImDrawList *draw, ImVec2 display, Source &source, size_t source
 	const float disc_column = (content - COLUMN_GAP * scale) * DISC_COLUMN_SHARE;
 	const ImVec2 centre(SAFE_X * scale + disc_column / 2.0f, display.y / 2.0f);
 	const float radius = DISC_RADIUS * scale;
-	draw_disc(draw, centre, radius, scale);
+	const bool has_cover = CoverArt::Draw(draw, centre, radius * 2.0f);
+	if (!has_cover)
+		draw_disc(draw, centre, radius, scale);
 	const size_t count = source.games.size();
-	if (count) {
+	if (count && !has_cover) {
 		const Game &game = source.games[source.selected];
 		draw_label(draw, centre, radius, scale, game.name);
 		if (!game.serial.empty()) {
@@ -541,6 +611,12 @@ void draw_picker(ImDrawList *draw, ImVec2 display, Source &source, size_t source
 				ImVec2(centre.x - width / 2.0f, centre.y + SERIAL_DROP * scale - size / 2.0f), FADED, game.serial,
 				SERIAL_TRACKING);
 		}
+	}
+	if (cover_settings.enabled && cover_settings.auto_download && count) {
+		const std::string retry = "START  ponow okladki";
+		const float size = HINT_SIZE * scale;
+		draw_text(draw, regular, size, ImVec2(centre.x - text_width(regular, size, retry) / 2.0f,
+			centre.y + radius + HINT_GAP * scale), FADED, retry);
 	}
 
 	// The list's block, centred down the display inside the title-safe area: the header, the entries or what to do
@@ -724,6 +800,7 @@ bool present(uint32_t width, uint32_t height, void (*draw_frame)(void), const ch
 	if (draw_frame)
 		draw_frame();
 	ImGui_ImplXsdk_RenderDrawData(ImGui::GetDrawData());
+	CoverArt::AfterRender();
 	xsdk_gpu_resolve(address, width, height, BLACK_ARGB);
 	if (shot)
 		write_shot(address, width, height, shot);
@@ -785,11 +862,13 @@ bool picker_open(void)
 		return false;
 	}
 	load_settings();
+	sources[0].root = games_root.c_str();
 	return true;
 }
 
 void picker_close(void)
 {
+	CoverArt::Stop();
 	ImGui_ImplXsdk_Shutdown();
 	ImGui::DestroyContext();
 }
@@ -802,17 +881,25 @@ bool disc_opens(const char *path)
 bool picker_choose(uint32_t width, uint32_t height, const char *failed_path, char *path, size_t path_bytes)
 {
 	scan();
+	std::vector<std::string> startup_paths;
+	for (const Source &source : sources) {
+		for (const Game &game : source.games)
+			startup_paths.push_back(game.path);
+	}
+	CoverArt::Begin(cover_settings, startup_paths);
 	const std::string message = failed_path
 		? stem(failed_path) + " didn't start. Check its disc image, and that a PS1 BIOS is beside swanstation.xex."
 		: std::string();
 	size_t rest_frames = 0;
 	const Game *rested_on = nullptr;
+	bool ending = false;
+	bool starting = false;
 	for (;;) {
 		ImGui_ImplXsdk_NewFrame(width, height);
 		ImGui::NewFrame();
 		Source &source = sources[current];
 		const size_t count = source.games.size();
-		if (count) {
+		if (count && !ending) {
 			if (pressed(ImGuiKey_GamepadDpadDown, true) || pressed(ImGuiKey_GamepadLStickDown, true))
 				source.selected = std::min(source.selected + 1, count - 1);
 			if (pressed(ImGuiKey_GamepadDpadUp, true) || pressed(ImGuiKey_GamepadLStickUp, true))
@@ -823,45 +910,75 @@ bool picker_choose(uint32_t width, uint32_t height, const char *failed_path, cha
 				source.selected = source.selected > source.fit ? source.selected - source.fit : 0;
 		}
 		const bool previous = pressed(ImGuiKey_GamepadL1);
-		if (previous || pressed(ImGuiKey_GamepadR1)) {
+		if (!ending && (previous || pressed(ImGuiKey_GamepadR1))) {
 			const size_t total = IM_ARRAYSIZE(sources);
 			do
 				current = (current + (previous ? total - 1 : 1)) % total;
 			while (!sources[current].present);
 		}
 		Source &shown = sources[current];
-		if (shown.games.size() && pressed(ImGuiKey_GamepadFaceDown)) {
+		if (!ending && shown.games.size() && pressed(ImGuiKey_GamepadFaceDown)) {
 			last_path = shown.games[shown.selected].path;
 			snprintf(path, path_bytes, "%s", last_path.c_str());
-			finish_serial(true);
-			ImGui::EndFrame();
-			return true;
+			starting = true;
+			ending = true;
+			CoverArt::RequestStop();
 		}
-		if (pressed(ImGuiKey_GamepadFaceRight)) {
-			finish_serial(true);
-			ImGui::EndFrame();
-			return false;
+		if (!ending && pressed(ImGuiKey_GamepadFaceRight)) {
+			ending = true;
+			CoverArt::RequestStop();
 		}
-		if (pressed(ImGuiKey_GamepadFaceUp))
+		if (!ending && pressed(ImGuiKey_GamepadFaceUp))
 			toggle_analog();
+		if (!ending && pressed(ImGuiKey_GamepadStart))
+			CoverArt::RetryMissing();
 		finish_serial(false);
 		Game *const game = shown.games.empty() ? nullptr : &shown.games[shown.selected];
+		if (game && !game->serial_read) {
+			const std::string known = CoverArt::KnownSerial(game->path);
+			if (!known.empty()) {
+				game->serial = known;
+				game->serial_read = true;
+			}
+		}
 		rest_frames = game == rested_on ? rest_frames + 1 : 0;
 		rested_on = game;
-		if (game && !game->serial_read && !serial_read.thread && rest_frames >= SERIAL_REST_FRAMES)
+		if (!ending && game && !game->serial_read && !serial_read.thread && rest_frames >= SERIAL_REST_FRAMES)
 			start_serial(*game);
+		bool covers_stopped = false;
+		if (ending) {
+			covers_stopped = CoverArt::TryStop();
+		} else {
+			// Znany serial nie wymaga ponownego oczekiwania 15 klatek.
+			CoverArt::Select(game ? game->serial : std::string());
+			std::vector<std::string> neighbours;
+			if (game) {
+				for (size_t distance = 1; distance <= 2; ++distance) {
+					if (shown.selected + distance < shown.games.size())
+						neighbours.push_back(shown.games[shown.selected + distance].path);
+					if (shown.selected >= distance)
+						neighbours.push_back(shown.games[shown.selected - distance].path);
+				}
+			}
+			CoverArt::Prefetch(neighbours);
+			CoverArt::Update();
+		}
 		size_t present_count = 0;
 		for (const Source &source_shown : sources)
 			present_count += source_shown.present;
-		draw_picker(ImGui::GetBackgroundDrawList(), ImVec2((float)width, (float)height), shown, present_count, message);
+		draw_picker(ImGui::GetBackgroundDrawList(), ImVec2((float)width, (float)height), shown, present_count,
+			ending ? (starting ? "Uruchamianie gry..." : "Zamykanie...") : message);
 		ImGui::Render();
 		// The shot once the selected game's serial is in.
 		const bool shoot = picker_shots && (!game || (game->serial_read && !serial_read.thread)) &&
 			rest_frames >= SERIAL_REST_FRAMES + SHOT_FRAMES;
 		if (!present(width, height, nullptr, shoot ? "shot_picker.ppm" : nullptr) || shoot) {
 			finish_serial(true);
+			CoverArt::Stop();
 			return false;
 		}
+		if (ending && covers_stopped && !serial_read.thread)
+			return starting;
 	}
 }
 

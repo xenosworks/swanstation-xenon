@@ -1486,6 +1486,13 @@ bool HostInterface::HasCoreVariablesChanged()
 
 std::string HostInterface::GetBIOSDirectory()
 {
+#ifdef __XSDK__
+  // Zmiana katalogu systemowego skierowałaby cache do oryginalnej instalacji.
+  // Osobna opcja dotyczy wyłącznie odczytu BIOS-u, zapisy nadal trafiają do game:.
+  const std::string bios_directory = GetStringSettingValue("BIOS", "Directory", "");
+  if (!bios_directory.empty())
+    return bios_directory;
+#endif
   // Assume BIOS files are located in system directory.
   const char* system_directory = nullptr;
   if (!g_retro_environment_callback(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_directory))

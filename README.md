@@ -1,4 +1,51 @@
 # SwanStation - PlayStation 1, aka. PSX Emulator
+
+## Opis
+Port Xbox 360 udostępnia okładki gier w istniejącym pickerze: lokalny cache JPG/PNG,
+opcjonalne HTTPS z PSX Covers i jednoznaczny fallback Libretro. Brak grafiki lub
+sieci pozostawia dotychczasowe CD. Dokumentacja poniżej opisuje pozostałe funkcje rdzenia.
+
+## Wymagania
+- Do XEX: otwarty xsdk, toolchain PowerPC, imgui-xenon, glslang i CMake.
+- Do HTTPS: curl-xenon i mbedtls-xenon, zestaw CA i poprawny zegar konsoli.
+- Do testów okładek na komputerze: G++ z C++17, Python 3 i publiczne nagłówki zależności.
+
+## Instalacja
+Zbuduj aplikację według [instrukcji okładek Xbox 360](docs/COVER_ART.md).
+Zachowaj oryginalną instalację i testuj w osobnym katalogu. Gry i własny BIOS
+dodaj lub wskaż samodzielnie; proponowana zmiana ich nie zawiera.
+
+## Uruchomienie
+Przenieś XEX wraz z `cacert.pem`, `cover_fallback.tsv` i `cover_fallback.source.json`,
+następnie uruchom go z dashboardu. START w pickerze ponawia brakujące okładki.
+Testy na komputerze: `bash tests/test_cover_art.sh` i `bash tests/xenon/test_cover_download.sh`.
+
+## Konfiguracja
+W płaskim `settings.txt`: `cover_enabled`, `cover_auto_download`,
+`cover_download_on_startup`, `cover_fallback_source` (`1`/`0`). Opcjonalne `games_root`
+wskazuje katalog gier, a `bios_directory` w `host.txt` katalog odczytu BIOS-u.
+Domyślne katalogi gier i zapisów pozostają bez zmian. Więcej w `docs/COVER_ART.md`.
+
+## Znane problemy i rozwiązania
+- Brak CA, nieprawidłowy zegar i błąd TLS wyłączają pobranie, bez niebezpiecznych obejść.
+- Pierwsza nieznana gra i skok poza bufor mogą wymagać odczytu obrazu płyty i grafiki.
+- Potwierdzono start, listę i pobranie 230 okładek na Xbox 360; ostatnia poprawka
+  bufora RAM czeka na ocenę płynności na konsoli. Rozgrywka i zapisy wymagają dalszych testów.
+
+## Historia zmian
+- Bieżący commit `docs(readme)`: instrukcja konfiguracji okładek dla Xbox 360.
+- `d2ab127d`: lokalne okładki, bezpieczne HTTPS, bufor podglądów i testy hosta/CI.
+- `7c2a4b29`: wersja 0.1.2.0 w nagłówku XEX.
+- `e7a45609`: wersja 0.1.1.0 w nagłówku XEX.
+- `7d8e032c`: analogi i wibracje DualShock oraz karty pamięci w plikach.
+- `c28584e7`: ustawienie kontrolera przy starcie gry.
+- `0c009861`: respektowanie trybu analogowego po resecie.
+- `c1f7c021`: obsługa plików RetroArch przez libretro-common.
+- `2cb70cce`: wersja 0.1.0.0 w nagłówku XEX.
+- `f935e9e2`: rozłożenie kompilacji sceny na klatki.
+
+## Dokumentacja rdzenia
+
 [Features](#features) | [System Requirements](#system-requirements) | [Disclaimers](#disclaimers)
 
 SwanStation is a hard fork and open-source Libretro core implementation of DuckStation, which is an emulator of the Sony PlayStation(TM) console, focusing on playability, speed, and long-term maintainability. The goal is to be as accurate as possible while maintaining performance suitable for low-end devices. "Hack" options are discouraged, the default configuration should support all playable games with only some of the enhancements having compatibility issues.

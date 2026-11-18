@@ -1,0 +1,37 @@
+name: Testy okładek Xbox 360
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cover-art:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Testy hosta wymagają publicznych nagłówków, bez toolchaina PowerPC i komercyjnego SDK.
+      - uses: actions/checkout@v4
+        with:
+          repository: xenosworks/xsdk
+          ref: 9e6de98f6b5d737bce0fecd2864edae94bdd2637
+          path: work/xsdk
+      - uses: actions/checkout@v4
+        with:
+          repository: xenosworks/imgui-xenon
+          ref: 66f7e0330c9ad5bf252592f0b2c7c462becd1690
+          path: work/imgui-xenon
+      - uses: actions/checkout@v4
+        with:
+          repository: xenosworks/curl-xenon
+          ref: a6b70bd06820e1c625f47fe0e592e08c5daaa6b4
+          path: work/curl-xenon
+      - name: Dekoder, cache i ustawienia
+        run: bash tests/test_cover_art.sh
+      - name: Kontrola pamięci ASan i UBSan
+        run: SANITIZE=1 bash tests/test_cover_art.sh
+      - name: Transport HTTPS i dopasowanie Libretro
+        run: bash tests/xenon/test_cover_download.sh

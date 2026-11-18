@@ -110,6 +110,8 @@ enum { VERTICES_BYTES = CORNERS * sizeof(Corner) };
 typedef struct {
 	char game[LINE_BYTES];
 	char cpu[LINE_BYTES];
+	// Oddzielny katalog BIOS-u pozwala testować bez kopiowania oryginalnych danych.
+	char bios_directory[LINE_BYTES];
 	uint32_t frames;
 	uint32_t captures[MAX_CAPTURES];
 	uint32_t capture_count;
@@ -244,6 +246,11 @@ static void read_config(void)
 			snprintf(config.game, sizeof config.game, "%s", value + 1);
 		} else if (!strcmp(line, "cpu")) {
 			snprintf(config.cpu, sizeof config.cpu, "%s", value + 1);
+		} else if (!strcmp(line, "bios_directory")) {
+			if (strlen(value + 1) >= sizeof config.bios_directory)
+				xsdk_log_write("swanstation: zbyt dluga sciezka bios_directory, pominieto");
+			else
+				snprintf(config.bios_directory, sizeof config.bios_directory, "%s", value + 1);
 		} else if (!strcmp(line, "frames")) {
 			config.frames = (uint32_t)strtoul(value + 1, NULL, 10);
 		} else if (!strcmp(line, "capture")) {
@@ -279,6 +286,8 @@ static void core_log(enum retro_log_level level, const char *format, ...)
 // The core's options this host sets; the rest keep the core's defaults.
 static const char *core_option(const char *key)
 {
+	if (!strcmp(key, "swanstation_BIOS_Directory") && config.bios_directory[0])
+		return config.bios_directory;
 	if (!strcmp(key, "swanstation_GPU_Renderer"))
 		return "Software";
 	if (!strcmp(key, "swanstation_CPU_ExecutionMode"))

@@ -1,0 +1,17 @@
+{
+  "license": "CC-BY-SA-4.0",
+  "attribution": "Autorzy Libretro Database; metadane importowane z Redump zgodnie z opisem libretro-database.",
+  "changes": "Wyodrębniono kanoniczny serial i dokładną istniejącą nazwę Named_Boxarts. Pominięto seriale niejednoznaczne. Niedozwolone znaki nazw Libretro zamieniono na podkreślenia. Utworzono posortowany TSV. Nie dołączono grafik.",
+  "database_repository": "https://github.com/libretro/libretro-database",
+  "database_commit": "969e31a324119a17add184e8b716315a74adb51b",
+  "database_dat": "https://raw.githubusercontent.com/libretro/libretro-database/969e31a324119a17add184e8b716315a74adb51b/metadat/redump/Sony%20-%20PlayStation.dat",
+  "database_dat_sha256": "cd09844311bff3cb3b8ced83548a48ac0d878b383b393415a55485845a89a87c",
+  "database_version": "2026.11.14",
+  "art_repository": "https://github.com/libretro-thumbnails/Sony_-_PlayStation",
+  "art_commit": "ccee75c7744d81676b6725307aca27ef6be6231a",
+  "art_tree": "9f1f6f8a3cc24493e68b3c72f892efc2f02b7522",
+  "mapping_sha256": "39ce95b8c6ea4b5b282e0e2c7557ae80694a91e4ad2a7622a6cc800686103caa",
+  "mapping_records": 8710,
+  "ambiguous_serials_omitted": 265,
+  "license_url": "https://github.com/libretro/libretro-database/blob/969e31a324119a17add184e8b716315a74adb51b/LICENSE"
+}

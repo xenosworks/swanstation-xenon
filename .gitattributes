@@ -12,3 +12,6 @@
 *.sh text eol=lf
 CMakeLists.txt text eol=lf
 
+# Mapa ma stabilny SHA-256 i jest czytana także przez port PowerPC.
+data/cover_fallback.tsv text eol=lf
+data/cover_fallback.source.json text eol=lf
